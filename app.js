@@ -368,6 +368,9 @@ async function fetchHistoricalCandles(symbol, tf) {
   } else if (tf === '1w') {
     range = '1mo';
     interval = '1d';
+  } else if (tf === '1y') {
+    range = '1y';
+    interval = '1d';
   }
 
   try {
@@ -431,6 +434,9 @@ function generateSyntheticCandles(currentPrice, prevClose, tf) {
   } else if (tf === '1w') {
     totalCandles = 42;
     intervalSec = 14400; // 4 hours
+  } else if (tf === '1y') {
+    totalCandles = 52;
+    intervalSec = 86400 * 7; // weekly intervals
   }
 
   const changeTotal = currentPrice - prevClose;
