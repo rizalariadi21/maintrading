@@ -238,7 +238,20 @@ let macdChartInstance = null;
 let macdHistSeries = null;
 let macdLineSeries = null;
 let macdSignalSeries = null;
-let isSyncingRange = false;
+
+// Synchronized data lookups & sync states
+let currentMacdMap = new Map();
+let currentCandleMap = new Map();
+let latestMacdValues = { macd: null, signal: null, hist: null };
+
+let isSyncingRange1 = false;
+let isSyncingRange2 = false;
+let boundMainRangeHandler = null;
+let boundMacdRangeHandler = null;
+
+let isCrosshairSyncing = false;
+let boundMainCrosshairHandler = null;
+let boundMacdCrosshairHandler = null;
 
 function initChart() {
   const container = document.getElementById('tv-chart-container');
@@ -264,7 +277,8 @@ function initChart() {
     },
     rightPriceScale: {
       borderColor: '#202b3d',
-      scaleMargins: { top: 0.12, bottom: 0.12 }
+      scaleMargins: { top: 0.12, bottom: 0.12 },
+      minimumWidth: 85
     },
     timeScale: {
       borderColor: '#202b3d',
@@ -273,8 +287,9 @@ function initChart() {
     }
   });
 
-  // Crosshair move listener to update OHLC live preview header
+  // Default crosshair move listener to update OHLC live preview header (active when not in 2-chart sync)
   chartInstance.subscribeCrosshairMove((param) => {
+    if (appState.showMacd && boundMainCrosshairHandler) return;
     if (!param || !param.time || !param.seriesData) {
       if (currentChartData.length > 0) {
         updateOhlcDisplay(currentChartData[currentChartData.length - 1], false);
@@ -285,14 +300,6 @@ function initChart() {
     if (data) {
       updateOhlcDisplay(data, true);
     }
-  });
-
-  // Sync main chart range with MACD chart
-  chartInstance.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-    if (isSyncingRange || !macdChartInstance || !range) return;
-    isSyncingRange = true;
-    macdChartInstance.timeScale().setVisibleLogicalRange(range);
-    isSyncingRange = false;
   });
 
   // Responsive resize
@@ -437,24 +444,24 @@ async function fetchHistoricalCandles(symbol, tf) {
 function generateSyntheticCandles(currentPrice, prevClose, tf) {
   const points = [];
   const now = Math.floor(Date.now() / 1000);
-  let totalCandles = 30;
+  let totalCandles = 60;
   let intervalSec = 300; // 5 mins
 
   if (tf === '1h') {
-    totalCandles = 24;
-    intervalSec = 150; // 2.5 mins
+    totalCandles = 60;
+    intervalSec = 60; // 1 min
   } else if (tf === '4h') {
-    totalCandles = 32;
-    intervalSec = 450; // 7.5 mins
+    totalCandles = 60;
+    intervalSec = 240; // 4 mins
   } else if (tf === '1d') {
-    totalCandles = 36;
-    intervalSec = 1800; // 30 mins
+    totalCandles = 60;
+    intervalSec = 1440; // 24 mins
   } else if (tf === '1w') {
-    totalCandles = 42;
-    intervalSec = 14400; // 4 hours
+    totalCandles = 70;
+    intervalSec = 8640;
   } else if (tf === '1y') {
-    totalCandles = 52;
-    intervalSec = 86400 * 7; // weekly intervals
+    totalCandles = 80;
+    intervalSec = 86400 * 4.5;
   }
 
   const changeTotal = currentPrice - prevClose;
@@ -614,9 +621,142 @@ function setTimeframe(tf) {
 // ==========================================
 // MACD INDICATOR ENGINE (12, 26, 9)
 // ==========================================
+function setupChartSync() {
+  if (!chartInstance || !macdChartInstance) return;
+
+  const mainTs = chartInstance.timeScale();
+  const macdTs = macdChartInstance.timeScale();
+
+  // 1. Time scale bidirectional synchronization
+  if (boundMainRangeHandler) {
+    try { mainTs.unsubscribeVisibleLogicalRangeChange(boundMainRangeHandler); } catch (e) {}
+  }
+  if (boundMacdRangeHandler) {
+    try { macdTs.unsubscribeVisibleLogicalRangeChange(boundMacdRangeHandler); } catch (e) {}
+  }
+
+  boundMainRangeHandler = (range) => {
+    if (isSyncingRange2 || !macdChartInstance || !range) return;
+    const cur = macdTs.getVisibleLogicalRange();
+    if (cur && Math.abs(cur.from - range.from) < 0.005 && Math.abs(cur.to - range.to) < 0.005) {
+      return;
+    }
+    isSyncingRange1 = true;
+    macdTs.setVisibleLogicalRange(range);
+    isSyncingRange1 = false;
+  };
+
+  boundMacdRangeHandler = (range) => {
+    if (isSyncingRange1 || !chartInstance || !range) return;
+    const cur = mainTs.getVisibleLogicalRange();
+    if (cur && Math.abs(cur.from - range.from) < 0.005 && Math.abs(cur.to - range.to) < 0.005) {
+      return;
+    }
+    isSyncingRange2 = true;
+    mainTs.setVisibleLogicalRange(range);
+    isSyncingRange2 = false;
+  };
+
+  mainTs.subscribeVisibleLogicalRangeChange(boundMainRangeHandler);
+  macdTs.subscribeVisibleLogicalRangeChange(boundMacdRangeHandler);
+
+  // 2. Crosshair bidirectional synchronization
+  if (boundMainCrosshairHandler) {
+    try { chartInstance.unsubscribeCrosshairMove(boundMainCrosshairHandler); } catch (e) {}
+  }
+  if (boundMacdCrosshairHandler) {
+    try { macdChartInstance.unsubscribeCrosshairMove(boundMacdCrosshairHandler); } catch (e) {}
+  }
+
+  boundMainCrosshairHandler = (param) => {
+    if (isCrosshairSyncing) return;
+
+    if (!param || !param.time) {
+      if (currentChartData.length > 0) {
+        updateOhlcDisplay(currentChartData[currentChartData.length - 1], false);
+      }
+      if (latestMacdValues.macd !== null) {
+        updateMacdLegendValues(latestMacdValues.macd, latestMacdValues.signal, latestMacdValues.hist);
+      }
+      isCrosshairSyncing = true;
+      try {
+        if (macdChartInstance) macdChartInstance.clearCrosshairPosition();
+      } catch (e) {}
+      isCrosshairSyncing = false;
+      return;
+    }
+
+    const data = param.seriesData.get(activeSeries);
+    if (data) {
+      updateOhlcDisplay(data, true);
+    }
+
+    const mPoint = currentMacdMap.get(param.time);
+    if (mPoint) {
+      updateMacdLegendValues(mPoint.macd, mPoint.signal, mPoint.hist);
+      isCrosshairSyncing = true;
+      try {
+        if (macdChartInstance && macdLineSeries && typeof mPoint.macd === 'number') {
+          macdChartInstance.setCrosshairPosition(mPoint.macd, param.time, macdLineSeries);
+        }
+      } catch (e) {}
+      isCrosshairSyncing = false;
+    }
+  };
+
+  boundMacdCrosshairHandler = (param) => {
+    if (isCrosshairSyncing) return;
+
+    if (!param || !param.time) {
+      if (latestMacdValues.macd !== null) {
+        updateMacdLegendValues(latestMacdValues.macd, latestMacdValues.signal, latestMacdValues.hist);
+      }
+      isCrosshairSyncing = true;
+      try {
+        if (chartInstance) chartInstance.clearCrosshairPosition();
+      } catch (e) {}
+      isCrosshairSyncing = false;
+      return;
+    }
+
+    const mPoint = currentMacdMap.get(param.time);
+    if (mPoint) {
+      updateMacdLegendValues(mPoint.macd, mPoint.signal, mPoint.hist);
+    }
+
+    const cPoint = currentCandleMap.get(param.time);
+    if (cPoint && activeSeries) {
+      updateOhlcDisplay(cPoint, true);
+      isCrosshairSyncing = true;
+      try {
+        if (chartInstance) {
+          chartInstance.setCrosshairPosition(cPoint.close ?? cPoint.value, param.time, activeSeries);
+        }
+      } catch (e) {}
+      isCrosshairSyncing = false;
+    }
+  };
+
+  chartInstance.subscribeCrosshairMove(boundMainCrosshairHandler);
+  macdChartInstance.subscribeCrosshairMove(boundMacdCrosshairHandler);
+}
+
+function teardownChartSync() {
+  if (chartInstance && boundMainRangeHandler) {
+    try { chartInstance.timeScale().unsubscribeVisibleLogicalRangeChange(boundMainRangeHandler); } catch (e) {}
+    boundMainRangeHandler = null;
+  }
+  if (chartInstance && boundMainCrosshairHandler) {
+    try { chartInstance.unsubscribeCrosshairMove(boundMainCrosshairHandler); } catch (e) {}
+    boundMainCrosshairHandler = null;
+  }
+}
+
 function initMacdChart() {
   const container = document.getElementById('macd-chart-container');
   if (!container || !window.LightweightCharts) return;
+
+  teardownChartSync();
 
   if (macdChartInstance) {
     try {
@@ -645,7 +785,8 @@ function initMacdChart() {
     },
     rightPriceScale: {
       borderColor: '#202b3d',
-      scaleMargins: { top: 0.15, bottom: 0.15 }
+      scaleMargins: { top: 0.15, bottom: 0.15 },
+      minimumWidth: 85
     },
     timeScale: {
       borderColor: '#202b3d',
@@ -655,47 +796,49 @@ function initMacdChart() {
   });
 
   macdHistSeries = macdChartInstance.addHistogramSeries({
-    color: '#00c076',
-    priceFormat: { type: 'volume' }
+    priceFormat: {
+      type: 'price',
+      precision: 2,
+      minMove: 0.01
+    },
+    priceScaleId: 'right'
   });
 
   macdLineSeries = macdChartInstance.addLineSeries({
-    color: '#38bdf8',
+    color: '#2962ff',
     lineWidth: 1.5,
-    priceLineVisible: false
+    priceLineVisible: false,
+    lastValueVisible: false,
+    priceFormat: {
+      type: 'price',
+      precision: 2,
+      minMove: 0.01
+    }
   });
 
   macdSignalSeries = macdChartInstance.addLineSeries({
-    color: '#fb923c',
+    color: '#ff6d00',
     lineWidth: 1.5,
-    priceLineVisible: false
+    priceLineVisible: false,
+    lastValueVisible: false,
+    priceFormat: {
+      type: 'price',
+      precision: 2,
+      minMove: 0.01
+    }
   });
 
-  // Time-scale synchronization between main chart & MACD chart
-  if (chartInstance) {
-    chartInstance.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-      if (isSyncingRange || !macdChartInstance || !range) return;
-      isSyncingRange = true;
-      macdChartInstance.timeScale().setVisibleLogicalRange(range);
-      isSyncingRange = false;
+  try {
+    macdHistSeries.createPriceLine({
+      price: 0,
+      color: 'rgba(148, 163, 184, 0.25)',
+      lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dotted,
+      axisLabelVisible: false
     });
+  } catch (e) {}
 
-    macdChartInstance.timeScale().subscribeVisibleLogicalRangeChange((range) => {
-      if (isSyncingRange || !chartInstance || !range) return;
-      isSyncingRange = true;
-      chartInstance.timeScale().setVisibleLogicalRange(range);
-      isSyncingRange = false;
-    });
-  }
-
-  // Crosshair move on MACD pane updates legend
-  macdChartInstance.subscribeCrosshairMove((param) => {
-    if (!param || !param.time || !param.seriesData) return;
-    const lData = param.seriesData.get(macdLineSeries);
-    const sData = param.seriesData.get(macdSignalSeries);
-    const hData = param.seriesData.get(macdHistSeries);
-    updateMacdLegendValues(lData?.value, sData?.value, hData?.value);
-  });
+  setupChartSync();
 
   window.addEventListener('resize', () => {
     if (macdChartInstance && container) {
@@ -708,7 +851,7 @@ function initMacdChart() {
 }
 
 function calculateMACD(data, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
-  if (!data || data.length < slowPeriod + 2) return null;
+  if (!data || data.length === 0) return null;
   const kFast = 2 / (fastPeriod + 1);
   const kSlow = 2 / (slowPeriod + 1);
   const kSignal = 2 / (signalPeriod + 1);
@@ -716,43 +859,70 @@ function calculateMACD(data, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9)
   let emaFast = data[0].close;
   let emaSlow = data[0].close;
 
-  const macdLine = [];
+  const rawMacd = [];
   for (let i = 0; i < data.length; i++) {
     const price = data[i].close;
     emaFast = i === 0 ? price : (price * kFast + emaFast * (1 - kFast));
     emaSlow = i === 0 ? price : (price * kSlow + emaSlow * (1 - kSlow));
-
-    if (i >= slowPeriod - 1) {
-      macdLine.push({ time: data[i].time, value: +(emaFast - emaSlow).toFixed(4) });
-    }
+    rawMacd.push(emaFast - emaSlow);
   }
 
-  if (macdLine.length < signalPeriod) return null;
-
-  let emaSignal = macdLine[0].value;
+  let emaSignal = rawMacd[0];
+  const macdLine = [];
   const signalLine = [];
   const histogram = [];
 
-  for (let i = 0; i < macdLine.length; i++) {
-    const macdVal = macdLine[i].value;
-    emaSignal = i === 0 ? macdVal : (macdVal * kSignal + emaSignal * (1 - kSignal));
+  // Warmup period: wait until EMAs stabilize before plotting values
+  const warmup = data.length >= 35 ? Math.min(26, data.length - 5) : Math.min(2, data.length - 1);
 
-    if (i >= signalPeriod - 1) {
-      const sigVal = +emaSignal.toFixed(4);
-      const histVal = +(macdVal - sigVal).toFixed(4);
-      signalLine.push({ time: macdLine[i].time, value: sigVal });
-      histogram.push({
-        time: macdLine[i].time,
-        value: histVal,
-        color: histVal >= 0 ? '#00c076' : '#ff3b69'
-      });
+  let prevHistVal = 0;
+
+  for (let i = 0; i < data.length; i++) {
+    const t = data[i].time;
+    const macdVal = rawMacd[i];
+    emaSignal = i === 0 ? macdVal : (macdVal * kSignal + emaSignal * (1 - kSignal));
+    const sigVal = emaSignal;
+    const histVal = macdVal - sigVal;
+
+    if (i < warmup) {
+      // Whitespace data: keeps exact 1:1 bar index & time alignment with main chart!
+      macdLine.push({ time: t });
+      signalLine.push({ time: t });
+      histogram.push({ time: t });
+    } else {
+      const roundedMacd = +macdVal.toFixed(4);
+      const roundedSig = +sigVal.toFixed(4);
+      const roundedHist = +histVal.toFixed(4);
+
+      // TradingView 4-Color Histogram (Solid vs Faded/Translucent):
+      // 1. Above zero & growing (>= prev): Dark Solid Teal (#26a69a)
+      // 2. Above zero & falling (< prev): Translucent Teal (rgba(38, 166, 154, 0.45))
+      // 3. Below zero & growing negative (<= prev): Dark Solid Red (#ef5350)
+      // 4. Below zero & recovering towards 0 (> prev): Translucent Red (rgba(239, 83, 80, 0.45))
+      let histColor;
+      if (roundedHist >= 0) {
+        if (roundedHist >= prevHistVal) {
+          histColor = '#26a69a';
+        } else {
+          histColor = 'rgba(38, 166, 154, 0.45)';
+        }
+      } else {
+        if (roundedHist <= prevHistVal) {
+          histColor = '#ef5350';
+        } else {
+          histColor = 'rgba(239, 83, 80, 0.45)';
+        }
+      }
+
+      macdLine.push({ time: t, value: roundedMacd });
+      signalLine.push({ time: t, value: roundedSig });
+      histogram.push({ time: t, value: roundedHist, color: histColor });
+
+      prevHistVal = roundedHist;
     }
   }
 
-  const validTimes = new Set(signalLine.map(s => s.time));
-  const filteredMacd = macdLine.filter(m => validTimes.has(m.time));
-
-  return { macdLine: filteredMacd, signalLine, histogram };
+  return { macdLine, signalLine, histogram };
 }
 
 function renderMacdData(candles) {
@@ -764,15 +934,53 @@ function renderMacdData(candles) {
   const macdResult = calculateMACD(candles);
   if (!macdResult) return;
 
+  currentMacdMap.clear();
+  currentCandleMap.clear();
+
+  for (let i = 0; i < candles.length; i++) {
+    const c = candles[i];
+    currentCandleMap.set(c.time, c);
+
+    const m = macdResult.macdLine[i];
+    const s = macdResult.signalLine[i];
+    const h = macdResult.histogram[i];
+
+    currentMacdMap.set(c.time, {
+      macd: m?.value,
+      signal: s?.value,
+      hist: h?.value,
+      color: h?.color
+    });
+  }
+
   macdHistSeries.setData(macdResult.histogram);
   macdLineSeries.setData(macdResult.macdLine);
   macdSignalSeries.setData(macdResult.signalLine);
 
-  macdChartInstance.timeScale().fitContent();
+  // Sync visible logical range directly from main chart without calling fitContent()
+  if (chartInstance) {
+    const mainRange = chartInstance.timeScale().getVisibleLogicalRange();
+    if (mainRange) {
+      isSyncingRange1 = true;
+      macdChartInstance.timeScale().setVisibleLogicalRange(mainRange);
+      isSyncingRange1 = false;
+    }
+  }
 
-  const lastH = macdResult.histogram[macdResult.histogram.length - 1]?.value;
-  const lastM = macdResult.macdLine[macdResult.macdLine.length - 1]?.value;
-  const lastS = macdResult.signalLine[macdResult.signalLine.length - 1]?.value;
+  let lastM = null, lastS = null, lastH = null;
+  for (let i = candles.length - 1; i >= 0; i--) {
+    const m = macdResult.macdLine[i]?.value;
+    const s = macdResult.signalLine[i]?.value;
+    const h = macdResult.histogram[i]?.value;
+    if (typeof m === 'number' && typeof s === 'number' && typeof h === 'number') {
+      lastM = m;
+      lastS = s;
+      lastH = h;
+      break;
+    }
+  }
+
+  latestMacdValues = { macd: lastM, signal: lastS, hist: lastH };
   updateMacdLegendValues(lastM, lastS, lastH);
 }
 
@@ -786,9 +994,14 @@ function updateMacdLegendValues(lineVal, sigVal, histVal) {
   if (histEl) {
     if (typeof histVal === 'number') {
       histEl.textContent = (histVal >= 0 ? '+' : '') + histVal.toFixed(2);
-      histEl.className = histVal >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold';
+      if (histVal >= 0) {
+        histEl.className = 'text-[#26a69a] font-bold';
+      } else {
+        histEl.className = 'text-[#ef5350] font-bold';
+      }
     } else {
       histEl.textContent = '--';
+      histEl.className = 'text-slate-400 font-normal';
     }
   }
 }
@@ -809,12 +1022,25 @@ function toggleMacd(forceShow = null) {
       initMacdChart();
       const displayCandles = getScaledCandles(currentChartData);
       renderMacdData(displayCandles);
-      if (chartInstance) chartInstance.timeScale().fitContent();
+      if (chartInstance) {
+        chartInstance.timeScale().fitContent();
+        const mainRange = chartInstance.timeScale().getVisibleLogicalRange();
+        if (macdChartInstance && mainRange) {
+          macdChartInstance.timeScale().setVisibleLogicalRange(mainRange);
+        }
+      }
     }, 50);
   } else {
     if (wrapper) wrapper.classList.add('hidden');
     if (btn) {
       btn.className = 'px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium flex items-center gap-1.5 transition text-[11px] bg-brand-dark border border-brand-border';
+    }
+    teardownChartSync();
+    if (macdChartInstance) {
+      try {
+        macdChartInstance.remove();
+      } catch (e) {}
+      macdChartInstance = null;
     }
   }
 
