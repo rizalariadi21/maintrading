@@ -4,7 +4,6 @@
   "description": "Real-time Indonesian Stocks & Crypto Trading Simulator",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
     "dev": "node server.js"
   },
   "keywords": ["trading", "simulator", "indonesia", "stocks", "crypto", "idx", "ihsg", "bbca"],
