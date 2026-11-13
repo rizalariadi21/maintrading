@@ -113,8 +113,9 @@ let appState = {
   cryptoInputMode: 'IDR', // 'IDR' or 'COIN'
   currentFilter: 'all',
   chartType: 'candlestick', // 'candlestick' or 'line'
-  currentTimeframe: '1h',   // '1h', '4h', '1d', '1w'
-  currency: 'IDR'           // 'IDR' or 'USD'
+  currentTimeframe: '1h',   // '1h', '4h', '1d', '1w', '1y'
+  currency: 'IDR',          // 'IDR' or 'USD'
+  showMacd: false           // MACD indicator toggle
 };
 
 // Market data cache: symbol -> { price, change24h, change24hPct, high, low, prevClose, lastUpdated }
@@ -130,6 +131,7 @@ function loadState() {
       appState.portfolio = parsed.portfolio || {};
       appState.history = parsed.history || [];
       appState.currency = parsed.currency || 'IDR';
+      appState.showMacd = Boolean(parsed.showMacd);
     }
   } catch (err) {
     console.error('Error loading state from localStorage:', err);
@@ -143,7 +145,8 @@ function saveState() {
       cash: appState.cash,
       portfolio: appState.portfolio,
       history: appState.history,
-      currency: appState.currency
+      currency: appState.currency,
+      showMacd: appState.showMacd
     }));
   } catch (err) {
     console.error('Error saving state to localStorage:', err);
@@ -230,6 +233,13 @@ let chartInstance = null;
 let activeSeries = null;
 let currentChartData = []; // [{ time, open, high, low, close }]
 
+// MACD Indicator series & state
+let macdChartInstance = null;
+let macdHistSeries = null;
+let macdLineSeries = null;
+let macdSignalSeries = null;
+let isSyncingRange = false;
+
 function initChart() {
   const container = document.getElementById('tv-chart-container');
   if (!container || !window.LightweightCharts) return;
@@ -275,6 +285,14 @@ function initChart() {
     if (data) {
       updateOhlcDisplay(data, true);
     }
+  });
+
+  // Sync main chart range with MACD chart
+  chartInstance.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    if (isSyncingRange || !macdChartInstance || !range) return;
+    isSyncingRange = true;
+    macdChartInstance.timeScale().setVisibleLogicalRange(range);
+    isSyncingRange = false;
   });
 
   // Responsive resize
@@ -505,6 +523,10 @@ async function renderChartData(symbol) {
     updateOhlcDisplay(currentChartData[currentChartData.length - 1], false);
   }
 
+  if (appState.showMacd) {
+    renderMacdData(displayCandles);
+  }
+
   setTimeout(() => {
     if (loading) loading.classList.add('hidden');
   }, 200);
@@ -541,6 +563,10 @@ function updateChartCurrentTick(symbol, newPrice) {
   }
 
   updateOhlcDisplay(lastCandle, false);
+
+  if (appState.showMacd && currentChartData.length > 0) {
+    renderMacdData(getScaledCandles(currentChartData));
+  }
 }
 
 function setChartType(type) {
@@ -567,6 +593,9 @@ function setChartType(type) {
       activeSeries.setData(displayCandles.map(c => ({ time: c.time, value: c.close })));
     }
     chartInstance.timeScale().fitContent();
+    if (appState.showMacd) {
+      renderMacdData(displayCandles);
+    }
   }
 }
 
@@ -580,6 +609,225 @@ function setTimeframe(tf) {
     }
   });
   renderChartData(appState.selectedAsset);
+}
+
+// ==========================================
+// MACD INDICATOR ENGINE (12, 26, 9)
+// ==========================================
+function initMacdChart() {
+  const container = document.getElementById('macd-chart-container');
+  if (!container || !window.LightweightCharts) return;
+
+  if (macdChartInstance) {
+    try {
+      macdChartInstance.remove();
+    } catch (e) {}
+    macdChartInstance = null;
+  }
+
+  container.innerHTML = '';
+
+  macdChartInstance = LightweightCharts.createChart(container, {
+    layout: {
+      background: { color: '#070a0f' },
+      textColor: '#94a3b8',
+      fontSize: 10,
+      fontFamily: "'JetBrains Mono', monospace"
+    },
+    grid: {
+      vertLines: { color: 'rgba(32, 43, 61, 0.25)' },
+      horzLines: { color: 'rgba(32, 43, 61, 0.25)' }
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      vertLine: { color: '#38bdf8', width: 1, style: 2 },
+      horzLine: { color: '#38bdf8', width: 1, style: 2 }
+    },
+    rightPriceScale: {
+      borderColor: '#202b3d',
+      scaleMargins: { top: 0.15, bottom: 0.15 }
+    },
+    timeScale: {
+      borderColor: '#202b3d',
+      timeVisible: true,
+      secondsVisible: false
+    }
+  });
+
+  macdHistSeries = macdChartInstance.addHistogramSeries({
+    color: '#00c076',
+    priceFormat: { type: 'volume' }
+  });
+
+  macdLineSeries = macdChartInstance.addLineSeries({
+    color: '#38bdf8',
+    lineWidth: 1.5,
+    priceLineVisible: false
+  });
+
+  macdSignalSeries = macdChartInstance.addLineSeries({
+    color: '#fb923c',
+    lineWidth: 1.5,
+    priceLineVisible: false
+  });
+
+  // Time-scale synchronization between main chart & MACD chart
+  if (chartInstance) {
+    chartInstance.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (isSyncingRange || !macdChartInstance || !range) return;
+      isSyncingRange = true;
+      macdChartInstance.timeScale().setVisibleLogicalRange(range);
+      isSyncingRange = false;
+    });
+
+    macdChartInstance.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (isSyncingRange || !chartInstance || !range) return;
+      isSyncingRange = true;
+      chartInstance.timeScale().setVisibleLogicalRange(range);
+      isSyncingRange = false;
+    });
+  }
+
+  // Crosshair move on MACD pane updates legend
+  macdChartInstance.subscribeCrosshairMove((param) => {
+    if (!param || !param.time || !param.seriesData) return;
+    const lData = param.seriesData.get(macdLineSeries);
+    const sData = param.seriesData.get(macdSignalSeries);
+    const hData = param.seriesData.get(macdHistSeries);
+    updateMacdLegendValues(lData?.value, sData?.value, hData?.value);
+  });
+
+  window.addEventListener('resize', () => {
+    if (macdChartInstance && container) {
+      macdChartInstance.applyOptions({
+        width: container.clientWidth,
+        height: container.clientHeight
+      });
+    }
+  });
+}
+
+function calculateMACD(data, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+  if (!data || data.length < slowPeriod + 2) return null;
+  const kFast = 2 / (fastPeriod + 1);
+  const kSlow = 2 / (slowPeriod + 1);
+  const kSignal = 2 / (signalPeriod + 1);
+
+  let emaFast = data[0].close;
+  let emaSlow = data[0].close;
+
+  const macdLine = [];
+  for (let i = 0; i < data.length; i++) {
+    const price = data[i].close;
+    emaFast = i === 0 ? price : (price * kFast + emaFast * (1 - kFast));
+    emaSlow = i === 0 ? price : (price * kSlow + emaSlow * (1 - kSlow));
+
+    if (i >= slowPeriod - 1) {
+      macdLine.push({ time: data[i].time, value: +(emaFast - emaSlow).toFixed(4) });
+    }
+  }
+
+  if (macdLine.length < signalPeriod) return null;
+
+  let emaSignal = macdLine[0].value;
+  const signalLine = [];
+  const histogram = [];
+
+  for (let i = 0; i < macdLine.length; i++) {
+    const macdVal = macdLine[i].value;
+    emaSignal = i === 0 ? macdVal : (macdVal * kSignal + emaSignal * (1 - kSignal));
+
+    if (i >= signalPeriod - 1) {
+      const sigVal = +emaSignal.toFixed(4);
+      const histVal = +(macdVal - sigVal).toFixed(4);
+      signalLine.push({ time: macdLine[i].time, value: sigVal });
+      histogram.push({
+        time: macdLine[i].time,
+        value: histVal,
+        color: histVal >= 0 ? '#00c076' : '#ff3b69'
+      });
+    }
+  }
+
+  const validTimes = new Set(signalLine.map(s => s.time));
+  const filteredMacd = macdLine.filter(m => validTimes.has(m.time));
+
+  return { macdLine: filteredMacd, signalLine, histogram };
+}
+
+function renderMacdData(candles) {
+  if (!appState.showMacd || !candles || candles.length === 0) return;
+  if (!macdChartInstance) {
+    initMacdChart();
+  }
+
+  const macdResult = calculateMACD(candles);
+  if (!macdResult) return;
+
+  macdHistSeries.setData(macdResult.histogram);
+  macdLineSeries.setData(macdResult.macdLine);
+  macdSignalSeries.setData(macdResult.signalLine);
+
+  macdChartInstance.timeScale().fitContent();
+
+  const lastH = macdResult.histogram[macdResult.histogram.length - 1]?.value;
+  const lastM = macdResult.macdLine[macdResult.macdLine.length - 1]?.value;
+  const lastS = macdResult.signalLine[macdResult.signalLine.length - 1]?.value;
+  updateMacdLegendValues(lastM, lastS, lastH);
+}
+
+function updateMacdLegendValues(lineVal, sigVal, histVal) {
+  const lineEl = document.getElementById('macd-val-line');
+  const sigEl = document.getElementById('macd-val-signal');
+  const histEl = document.getElementById('macd-val-hist');
+
+  if (lineEl) lineEl.textContent = typeof lineVal === 'number' ? lineVal.toFixed(2) : '--';
+  if (sigEl) sigEl.textContent = typeof sigVal === 'number' ? sigVal.toFixed(2) : '--';
+  if (histEl) {
+    if (typeof histVal === 'number') {
+      histEl.textContent = (histVal >= 0 ? '+' : '') + histVal.toFixed(2);
+      histEl.className = histVal >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold';
+    } else {
+      histEl.textContent = '--';
+    }
+  }
+}
+
+function toggleMacd(forceShow = null) {
+  appState.showMacd = forceShow !== null ? forceShow : !appState.showMacd;
+  saveState();
+
+  const wrapper = document.getElementById('macd-pane-wrapper');
+  const btn = document.getElementById('btn-toggle-macd');
+
+  if (appState.showMacd) {
+    if (wrapper) wrapper.classList.remove('hidden');
+    if (btn) {
+      btn.className = 'px-2.5 py-1.5 rounded-lg text-sky-400 font-bold flex items-center gap-1.5 transition text-[11px] bg-sky-500/10 border border-sky-500/30 shadow';
+    }
+    setTimeout(() => {
+      initMacdChart();
+      const displayCandles = getScaledCandles(currentChartData);
+      renderMacdData(displayCandles);
+      if (chartInstance) chartInstance.timeScale().fitContent();
+    }, 50);
+  } else {
+    if (wrapper) wrapper.classList.add('hidden');
+    if (btn) {
+      btn.className = 'px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium flex items-center gap-1.5 transition text-[11px] bg-brand-dark border border-brand-border';
+    }
+  }
+
+  // Trigger resize on main chart
+  setTimeout(() => {
+    const mainContainer = document.getElementById('tv-chart-container');
+    if (chartInstance && mainContainer) {
+      chartInstance.applyOptions({
+        width: mainContainer.clientWidth,
+        height: mainContainer.clientHeight
+      });
+    }
+  }, 100);
 }
 
 function setCurrency(curr) {
@@ -1729,13 +1977,17 @@ function setupEventListeners() {
   document.getElementById('chart-type-candle')?.addEventListener('click', () => setChartType('candlestick'));
   document.getElementById('chart-type-line')?.addEventListener('click', () => setChartType('line'));
 
-  // Chart Timeframe Buttons (1 Jam, 4 Jam, 1 Hari, 1 Minggu)
+  // Chart Timeframe Buttons (1 Jam, 4 Jam, 1 Hari, 1 Minggu, 1 Tahun)
   document.querySelectorAll('.chart-tf-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const tf = e.currentTarget.dataset.tf;
       if (tf) setTimeframe(tf);
     });
   });
+
+  // MACD Indicator Toggle Buttons
+  document.getElementById('btn-toggle-macd')?.addEventListener('click', () => toggleMacd());
+  document.getElementById('btn-close-macd')?.addEventListener('click', () => toggleMacd(false));
 
   // Reset Modal
   const modal = document.getElementById('modal-reset');
@@ -1834,6 +2086,9 @@ document.addEventListener('DOMContentLoaded', () => {
   updateCurrencySelectorUI();
   updateCryptoInputModeUI();
   updateUI();
+  if (appState.showMacd) {
+    toggleMacd(true);
+  }
   startDataLoop();
 });
 

@@ -225,13 +225,22 @@
             </div>
           </div>
 
-          <!-- Right: Timeframe Switcher (1 Jam, 4 Jam, 1 Hari, 1 Minggu, 1 Tahun) -->
-          <div class="flex items-center gap-1 bg-brand-dark p-0.5 rounded-xl border border-brand-border text-[11px] font-mono-numbers">
-            <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold transition" data-tf="1h">1 Jam</button>
-            <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="4h">4 Jam</button>
-            <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1d">1 Hari</button>
-            <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1w">1 Minggu</button>
-            <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1y">1 Tahun</button>
+          <!-- Right: Indicator & Timeframe Switcher -->
+          <div class="flex flex-wrap items-center gap-2">
+            <!-- Indicator Toggle (MACD) -->
+            <button id="btn-toggle-macd" class="px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium flex items-center gap-1.5 transition text-[11px] bg-brand-dark border border-brand-border" title="Tampilkan Indikator MACD (Moving Average Convergence Divergence)">
+              <i data-lucide="activity" class="w-3.5 h-3.5 text-sky-400"></i>
+              <span>MACD</span>
+            </button>
+
+            <!-- Timeframe Switcher (1 Jam, 4 Jam, 1 Hari, 1 Minggu, 1 Tahun) -->
+            <div class="flex items-center gap-1 bg-brand-dark p-0.5 rounded-xl border border-brand-border text-[11px] font-mono-numbers">
+              <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold transition" data-tf="1h">1 Jam</button>
+              <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="4h">4 Jam</button>
+              <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1d">1 Hari</button>
+              <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1w">1 Minggu</button>
+              <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1y">1 Tahun</button>
+            </div>
           </div>
         </div>
 
@@ -242,6 +251,26 @@
             <span class="text-xs text-slate-400">Memuat data grafik realtime...</span>
           </div>
           <div id="tv-chart-container" class="w-full h-full"></div>
+        </div>
+
+        <!-- MACD Indicator Sub-Pane -->
+        <div id="macd-pane-wrapper" class="w-full mt-2 pt-2 border-t border-brand-border/80 flex flex-col hidden">
+          <!-- MACD Legend Header -->
+          <div class="flex items-center justify-between text-[10px] font-mono-numbers px-1 pb-1">
+            <div class="flex flex-wrap items-center gap-2.5">
+              <span class="font-bold text-slate-300">MACD (12, 26, 9)</span>
+              <span class="text-sky-400">MACD: <strong id="macd-val-line">--</strong></span>
+              <span class="text-amber-400">Signal: <strong id="macd-val-signal">--</strong></span>
+              <span class="text-emerald-400">Hist: <strong id="macd-val-hist">--</strong></span>
+            </div>
+            <button id="btn-close-macd" class="text-slate-500 hover:text-slate-300 transition text-[10px] flex items-center gap-1">
+              <span>✕ Tutup</span>
+            </button>
+          </div>
+          <!-- MACD Chart Canvas -->
+          <div class="relative w-full h-[105px] rounded-lg overflow-hidden bg-[#070a0f] border border-brand-border/60">
+            <div id="macd-chart-container" class="w-full h-full"></div>
+          </div>
         </div>
 
         <!-- Active Position Notice in Current Asset -->
