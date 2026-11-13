@@ -2352,21 +2352,6 @@ function setupEventListeners() {
   // MACD Indicator Toggle Buttons
   document.getElementById('btn-toggle-macd')?.addEventListener('click', () => toggleMacd());
   document.getElementById('btn-close-macd')?.addEventListener('click', () => toggleMacd(false));
-
-  // Reset Modal
-  const modal = document.getElementById('modal-reset');
-  document.getElementById('btn-open-reset')?.addEventListener('click', () => {
-    modal?.classList.remove('hidden');
-  });
-
-  document.getElementById('btn-cancel-reset')?.addEventListener('click', () => {
-    modal?.classList.add('hidden');
-  });
-
-  document.getElementById('btn-confirm-reset')?.addEventListener('click', () => {
-    resetToInitial();
-    modal?.classList.add('hidden');
-  });
 }
 
 // ==========================================
