@@ -113,7 +113,8 @@ let appState = {
   cryptoInputMode: 'IDR', // 'IDR' or 'COIN'
   currentFilter: 'all',
   chartType: 'candlestick', // 'candlestick' or 'line'
-  currentTimeframe: '1h'    // '1h', '4h', '1d', '1w'
+  currentTimeframe: '1h',   // '1h', '4h', '1d', '1w'
+  currency: 'IDR'           // 'IDR' or 'USD'
 };
 
 // Market data cache: symbol -> { price, change24h, change24hPct, high, low, prevClose, lastUpdated }
@@ -128,6 +129,7 @@ function loadState() {
       appState.cash = typeof parsed.cash === 'number' ? parsed.cash : INITIAL_CAPITAL;
       appState.portfolio = parsed.portfolio || {};
       appState.history = parsed.history || [];
+      appState.currency = parsed.currency || 'IDR';
     }
   } catch (err) {
     console.error('Error loading state from localStorage:', err);
@@ -140,7 +142,8 @@ function saveState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       cash: appState.cash,
       portfolio: appState.portfolio,
-      history: appState.history
+      history: appState.history,
+      currency: appState.currency
     }));
   } catch (err) {
     console.error('Error saving state to localStorage:', err);
@@ -153,7 +156,8 @@ function resetToInitial() {
   appState.history = [];
   saveState();
   updateUI();
-  showToast('Modal berhasil di-reset ke Rp 100.000.000!', 'success');
+  updateCurrencySelectorUI();
+  showToast(appState.currency === 'USD' ? 'Balance reset to $6,309.15 (Rp 100 Juta)!' : 'Modal berhasil di-reset ke Rp 100.000.000!', 'success');
   playAudioChime('chime');
 }
 
@@ -263,13 +267,13 @@ function initChart() {
   chartInstance.subscribeCrosshairMove((param) => {
     if (!param || !param.time || !param.seriesData) {
       if (currentChartData.length > 0) {
-        updateOhlcDisplay(currentChartData[currentChartData.length - 1]);
+        updateOhlcDisplay(currentChartData[currentChartData.length - 1], false);
       }
       return;
     }
     const data = param.seriesData.get(activeSeries);
     if (data) {
-      updateOhlcDisplay(data);
+      updateOhlcDisplay(data, true);
     }
   });
 
@@ -311,7 +315,7 @@ function createSeriesInstance() {
   }
 }
 
-function updateOhlcDisplay(candle) {
+function updateOhlcDisplay(candle, isAlreadyScaled = false) {
   const oEl = document.getElementById('ohlc-o');
   const hEl = document.getElementById('ohlc-h');
   const lEl = document.getElementById('ohlc-l');
@@ -323,10 +327,22 @@ function updateOhlcDisplay(candle) {
   const low = candle.low ?? candle.value ?? 0;
   const close = candle.close ?? candle.value ?? 0;
 
-  if (oEl) oEl.textContent = formatIDR(open);
-  if (hEl) hEl.textContent = formatIDR(high);
-  if (lEl) lEl.textContent = formatIDR(low);
-  if (cEl) cEl.textContent = formatIDR(close);
+  if (isAlreadyScaled && appState.currency === 'USD') {
+    const fmt = (v) => {
+      const abs = Math.abs(v);
+      const dec = abs >= 100 ? 2 : abs >= 1 ? 2 : 4;
+      return '$' + v.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+    };
+    if (oEl) oEl.textContent = fmt(open);
+    if (hEl) hEl.textContent = fmt(high);
+    if (lEl) lEl.textContent = fmt(low);
+    if (cEl) cEl.textContent = fmt(close);
+  } else {
+    if (oEl) oEl.textContent = formatCurrency(open);
+    if (hEl) hEl.textContent = formatCurrency(high);
+    if (lEl) lEl.textContent = formatCurrency(low);
+    if (cEl) cEl.textContent = formatCurrency(close);
+  }
 }
 
 // Fetch historical candles based on symbol & timeframe
@@ -463,6 +479,19 @@ function generateSyntheticCandles(currentPrice, prevClose, tf) {
   return points;
 }
 
+function getScaledCandles(candles) {
+  const isUSD = appState.currency === 'USD';
+  const rate = (isUSD && usdIdrRate > 0) ? usdIdrRate : 1;
+  if (!isUSD) return candles;
+  return candles.map(c => ({
+    time: c.time,
+    open: +(c.open / rate).toFixed(2),
+    high: +(c.high / rate).toFixed(2),
+    low: +(c.low / rate).toFixed(2),
+    close: +(c.close / rate).toFixed(2)
+  }));
+}
+
 async function renderChartData(symbol) {
   if (!chartInstance) return;
   const loading = document.getElementById('chart-loading-indicator');
@@ -474,8 +503,10 @@ async function renderChartData(symbol) {
 
   createSeriesInstance();
 
+  const displayCandles = getScaledCandles(currentChartData);
+
   if (appState.chartType === 'candlestick') {
-    activeSeries.setData(currentChartData);
+    activeSeries.setData(displayCandles);
   } else {
     const isUp = (marketData[symbol]?.change24hPct || 0) >= 0;
     activeSeries.applyOptions({
@@ -483,13 +514,13 @@ async function renderChartData(symbol) {
       bottomColor: isUp ? 'rgba(0, 192, 118, 0.01)' : 'rgba(255, 59, 105, 0.01)',
       lineColor: isUp ? '#00c076' : '#ff3b69'
     });
-    activeSeries.setData(currentChartData.map(c => ({ time: c.time, value: c.close })));
+    activeSeries.setData(displayCandles.map(c => ({ time: c.time, value: c.close })));
   }
 
   chartInstance.timeScale().fitContent();
 
   if (currentChartData.length > 0) {
-    updateOhlcDisplay(currentChartData[currentChartData.length - 1]);
+    updateOhlcDisplay(currentChartData[currentChartData.length - 1], false);
   }
 
   setTimeout(() => {
@@ -506,17 +537,28 @@ function updateChartCurrentTick(symbol, newPrice) {
   lastCandle.high = Math.max(lastCandle.high, lastCandle.close);
   lastCandle.low = Math.min(lastCandle.low, lastCandle.close);
 
+  const isUSD = appState.currency === 'USD';
+  const rate = (isUSD && usdIdrRate > 0) ? usdIdrRate : 1;
+
+  const tickCandle = {
+    time: lastCandle.time,
+    open: +(lastCandle.open / rate).toFixed(2),
+    high: +(lastCandle.high / rate).toFixed(2),
+    low: +(lastCandle.low / rate).toFixed(2),
+    close: +(lastCandle.close / rate).toFixed(2)
+  };
+
   if (appState.chartType === 'candlestick') {
     try {
-      activeSeries.update(lastCandle);
+      activeSeries.update(tickCandle);
     } catch (e) {}
   } else {
     try {
-      activeSeries.update({ time: lastCandle.time, value: lastCandle.close });
+      activeSeries.update({ time: tickCandle.time, value: tickCandle.close });
     } catch (e) {}
   }
 
-  updateOhlcDisplay(lastCandle);
+  updateOhlcDisplay(lastCandle, false);
 }
 
 function setChartType(type) {
@@ -536,10 +578,11 @@ function setChartType(type) {
 
   createSeriesInstance();
   if (currentChartData.length > 0) {
+    const displayCandles = getScaledCandles(currentChartData);
     if (type === 'candlestick') {
-      activeSeries.setData(currentChartData);
+      activeSeries.setData(displayCandles);
     } else {
-      activeSeries.setData(currentChartData.map(c => ({ time: c.time, value: c.close })));
+      activeSeries.setData(displayCandles.map(c => ({ time: c.time, value: c.close })));
     }
     chartInstance.timeScale().fitContent();
   }
@@ -555,6 +598,29 @@ function setTimeframe(tf) {
     }
   });
   renderChartData(appState.selectedAsset);
+}
+
+function setCurrency(curr) {
+  if (appState.currency === curr) return;
+  appState.currency = curr;
+  saveState();
+  updateCurrencySelectorUI();
+  updateCryptoInputModeUI();
+  updateUI();
+  renderChartData(appState.selectedAsset);
+  showToast(`Mata uang tampilan diubah ke ${curr === 'USD' ? 'US Dollar ($)' : 'Rupiah (Rp)'}`, 'info');
+}
+
+function updateCurrencySelectorUI() {
+  const btnIdr = document.getElementById('curr-btn-idr');
+  const btnUsd = document.getElementById('curr-btn-usd');
+  if (appState.currency === 'USD') {
+    if (btnUsd) btnUsd.className = 'px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold transition flex items-center gap-1.5 shadow text-[11px]';
+    if (btnIdr) btnIdr.className = 'px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition flex items-center gap-1.5 text-[11px]';
+  } else {
+    if (btnIdr) btnIdr.className = 'px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold transition flex items-center gap-1.5 shadow text-[11px]';
+    if (btnUsd) btnUsd.className = 'px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition flex items-center gap-1.5 text-[11px]';
+  }
 }
 
 // ==========================================
@@ -926,7 +992,7 @@ function executeTrade() {
     let grossIDR = 0;
 
     if (appState.cryptoInputMode === 'IDR') {
-      grossIDR = inputVal;
+      grossIDR = appState.currency === 'USD' ? (inputVal * (usdIdrRate || 15850)) : inputVal;
       coinAmount = grossIDR / currentPrice;
     } else {
       coinAmount = inputVal;
@@ -1115,13 +1181,14 @@ function calculateOrderEstimates() {
     const estimateEl = document.getElementById('crypto-estimate-text');
 
     if (appState.cryptoInputMode === 'IDR') {
-      gross = isNaN(inputVal) ? 0 : inputVal;
+      const rawVal = isNaN(inputVal) ? 0 : inputVal;
+      gross = appState.currency === 'USD' ? (rawVal * (usdIdrRate || 15850)) : rawVal;
       const coin = currentPrice > 0 ? (gross / currentPrice) : 0;
       if (estimateEl) estimateEl.textContent = `${coin.toFixed(6)} ${asset.unit}`;
     } else {
       const coin = isNaN(inputVal) ? 0 : inputVal;
       gross = coin * currentPrice;
-      if (estimateEl) estimateEl.textContent = formatIDR(gross);
+      if (estimateEl) estimateEl.textContent = formatCurrency(gross);
     }
 
     fee = Math.round(gross * FEE_CRYPTO);
@@ -1187,7 +1254,11 @@ function setCryptoPctPreset(pct) {
   if (appState.orderType === 'BUY') {
     const spendable = (appState.cash * (pct / 100)) / (1 + FEE_CRYPTO);
     if (appState.cryptoInputMode === 'IDR') {
-      cryptoInput.value = Math.floor(spendable);
+      if (appState.currency === 'USD') {
+        cryptoInput.value = (spendable / (usdIdrRate || 15850)).toFixed(2);
+      } else {
+        cryptoInput.value = Math.floor(spendable);
+      }
     } else {
       cryptoInput.value = (spendable / currentPrice).toFixed(6);
     }
@@ -1195,7 +1266,12 @@ function setCryptoPctPreset(pct) {
     const owned = appState.portfolio[symbol]?.qty || 0;
     const targetCoin = owned * (pct / 100);
     if (appState.cryptoInputMode === 'IDR') {
-      cryptoInput.value = Math.floor(targetCoin * currentPrice);
+      const grossIDR = targetCoin * currentPrice;
+      if (appState.currency === 'USD') {
+        cryptoInput.value = (grossIDR / (usdIdrRate || 15850)).toFixed(2);
+      } else {
+        cryptoInput.value = Math.floor(grossIDR);
+      }
     } else {
       cryptoInput.value = targetCoin.toFixed(6);
     }
@@ -1575,21 +1651,30 @@ function updateCryptoInputModeUI() {
   const prefix = document.getElementById('crypto-input-prefix');
   const input = document.getElementById('input-crypto-amount');
   const asset = ASSETS_CONFIG[appState.selectedAsset];
+  const isUSD = appState.currency === 'USD';
+
+  if (modeIdrBtn) {
+    modeIdrBtn.textContent = isUSD ? 'USD ($)' : 'IDR (Rp)';
+  }
 
   if (appState.cryptoInputMode === 'IDR') {
-    modeIdrBtn.className = 'px-2 py-0.5 rounded bg-brand-card font-medium text-white transition';
-    modeCoinBtn.className = 'px-2 py-0.5 rounded text-slate-400 hover:text-white transition';
-    if (prefix) prefix.textContent = 'Rp';
-    if (input) input.placeholder = '1.000.000';
+    if (modeIdrBtn) modeIdrBtn.className = 'px-2 py-0.5 rounded bg-brand-card font-medium text-white transition';
+    if (modeCoinBtn) modeCoinBtn.className = 'px-2 py-0.5 rounded text-slate-400 hover:text-white transition';
+    if (prefix) prefix.textContent = isUSD ? '$' : 'Rp';
+    if (input) input.placeholder = isUSD ? '100' : '1.000.000';
   } else {
-    modeCoinBtn.className = 'px-2 py-0.5 rounded bg-brand-card font-medium text-white transition';
-    modeIdrBtn.className = 'px-2 py-0.5 rounded text-slate-400 hover:text-white transition';
+    if (modeCoinBtn) modeCoinBtn.className = 'px-2 py-0.5 rounded bg-brand-card font-medium text-white transition';
+    if (modeIdrBtn) modeIdrBtn.className = 'px-2 py-0.5 rounded text-slate-400 hover:text-white transition';
     if (prefix) prefix.textContent = asset ? asset.unit : 'COIN';
     if (input) input.placeholder = '0.05';
   }
 }
 
 function setupEventListeners() {
+  // Currency Switcher (IDR vs USD)
+  document.getElementById('curr-btn-idr')?.addEventListener('click', () => setCurrency('IDR'));
+  document.getElementById('curr-btn-usd')?.addEventListener('click', () => setCurrency('USD'));
+
   // Buy / Sell Tabs
   document.getElementById('tab-order-buy')?.addEventListener('click', () => setOrderType('BUY'));
   document.getElementById('tab-order-sell')?.addEventListener('click', () => setOrderType('SELL'));
@@ -1713,9 +1798,27 @@ function setupEventListeners() {
 // ==========================================
 // 10. HELPER FUNCTIONS
 // ==========================================
-function formatIDR(amount) {
-  if (typeof amount !== 'number' || isNaN(amount)) return 'Rp 0';
-  return 'Rp ' + Math.round(amount).toLocaleString('id-ID');
+function formatCurrency(amountInIDR, decimals = null) {
+  if (typeof amountInIDR !== 'number' || isNaN(amountInIDR)) {
+    return appState.currency === 'USD' ? '$0.00' : 'Rp 0';
+  }
+
+  if (appState.currency === 'USD') {
+    const rate = (usdIdrRate && usdIdrRate > 0) ? usdIdrRate : 15850;
+    const amountUSD = amountInIDR / rate;
+    const abs = Math.abs(amountUSD);
+    let dec = decimals !== null ? decimals : (abs >= 100 ? 2 : abs >= 1 ? 2 : 4);
+    return '$' + amountUSD.toLocaleString('en-US', {
+      minimumFractionDigits: dec,
+      maximumFractionDigits: dec
+    });
+  }
+
+  return 'Rp ' + Math.round(amountInIDR).toLocaleString('id-ID');
+}
+
+function formatIDR(amount, decimals = null) {
+  return formatCurrency(amount, decimals);
 }
 
 function formatNumber(num, decimals = 0) {
@@ -1770,6 +1873,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadState();
   initChart();
   setupEventListeners();
+  updateCurrencySelectorUI();
+  updateCryptoInputModeUI();
   updateUI();
   startDataLoop();
 });

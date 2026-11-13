@@ -81,8 +81,19 @@
         </div>
       </div>
 
-      <!-- Portfolio Summary Badges -->
-      <div class="flex items-center gap-3">
+      <!-- Portfolio Summary Badges & Currency Selector -->
+      <div class="flex items-center gap-2.5">
+        
+        <!-- Currency Selector (IDR vs USD) -->
+        <div class="flex items-center bg-[#0b0e14]/90 p-0.5 rounded-xl border border-brand-border text-xs font-bold shadow-inner">
+          <button id="curr-btn-idr" class="px-2.5 py-1.5 rounded-lg text-white bg-brand-card transition flex items-center gap-1.5 shadow text-[11px]" title="Gunakan Mata Uang Rupiah (IDR)">
+            <span>🇮🇩 IDR</span>
+          </button>
+          <button id="curr-btn-usd" class="px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white transition flex items-center gap-1.5 text-[11px]" title="Gunakan Mata Uang US Dollar (USD)">
+            <span>🇺🇸 USD</span>
+          </button>
+        </div>
+
         <!-- Net Worth Card -->
         <div class="px-3.5 py-1.5 rounded-xl bg-[#192233] border border-brand-border text-right">
           <span class="text-[10px] text-slate-400 uppercase tracking-wider block font-medium">Total Nilai Aset</span>
