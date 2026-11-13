@@ -100,6 +100,7 @@ const INITIAL_CAPITAL = 100000000; // 100 Juta Rupiah
 const FEE_STOCK_BUY = 0.0015;  // 0.15%
 const FEE_STOCK_SELL = 0.0025; // 0.25%
 const FEE_CRYPTO = 0.0010;     // 0.10%
+const FEE_FUTURES = 0.0005;    // 0.05% of notional size
 
 // ==========================================
 // 2. STATE MANAGEMENT & LOCAL STORAGE
@@ -110,6 +111,10 @@ let appState = {
   history: [],   // list of transactions
   selectedAsset: 'BTC',
   orderType: 'BUY', // 'BUY' or 'SELL'
+  tradeMode: 'SPOT', // 'SPOT' or 'FUTURES'
+  futuresSide: 'LONG', // 'LONG' or 'SHORT'
+  futuresLeverage: 5,  // 1 to 10 (Max 10x)
+  futuresPositions: [], // list of active futures contracts
   cryptoInputMode: 'IDR', // 'IDR' or 'COIN'
   currentFilter: 'all',
   chartType: 'candlestick', // 'candlestick' or 'line'
@@ -133,6 +138,10 @@ function loadState() {
       appState.currency = parsed.currency || 'IDR';
       appState.showMacd = Boolean(parsed.showMacd);
       appState.currentTimeframe = parsed.currentTimeframe || '1h';
+      appState.tradeMode = (parsed.tradeMode === 'FUTURES') ? 'FUTURES' : 'SPOT';
+      appState.futuresSide = (parsed.futuresSide === 'SHORT') ? 'SHORT' : 'LONG';
+      appState.futuresLeverage = Math.min(10, Math.max(1, parseInt(parsed.futuresLeverage, 10) || 5));
+      appState.futuresPositions = Array.isArray(parsed.futuresPositions) ? parsed.futuresPositions : [];
     }
   } catch (err) {
     console.error('Error loading state from localStorage:', err);
@@ -148,7 +157,11 @@ function saveState() {
       history: appState.history,
       currency: appState.currency,
       showMacd: appState.showMacd,
-      currentTimeframe: appState.currentTimeframe
+      currentTimeframe: appState.currentTimeframe,
+      tradeMode: appState.tradeMode,
+      futuresSide: appState.futuresSide,
+      futuresLeverage: appState.futuresLeverage,
+      futuresPositions: appState.futuresPositions
     }));
   } catch (err) {
     console.error('Error saving state to localStorage:', err);
@@ -159,7 +172,12 @@ function resetToInitial() {
   appState.cash = INITIAL_CAPITAL;
   appState.portfolio = {};
   appState.history = [];
+  appState.tradeMode = 'SPOT';
+  appState.futuresSide = 'LONG';
+  appState.futuresLeverage = 5;
+  appState.futuresPositions = [];
   saveState();
+  updateTradeModeUI();
   updateUI();
   updateCurrencySelectorUI();
   showToast(appState.currency === 'USD' ? 'Balance reset to $6,309.15 (Rp 100 Juta)!' : 'Modal berhasil di-reset ke Rp 100.000.000!', 'success');
@@ -1177,12 +1195,19 @@ function setCurrency(curr) {
 function updateCurrencySelectorUI() {
   const btnIdr = document.getElementById('curr-btn-idr');
   const btnUsd = document.getElementById('curr-btn-usd');
+  const futuresPrefix = document.getElementById('futures-input-prefix');
+  const futuresInput = document.getElementById('input-futures-margin');
+
   if (appState.currency === 'USD') {
     if (btnUsd) btnUsd.className = 'px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold transition flex items-center gap-1.5 shadow text-[11px]';
     if (btnIdr) btnIdr.className = 'px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition flex items-center gap-1.5 text-[11px]';
+    if (futuresPrefix) futuresPrefix.textContent = '$';
+    if (futuresInput) futuresInput.placeholder = '300';
   } else {
     if (btnIdr) btnIdr.className = 'px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold transition flex items-center gap-1.5 shadow text-[11px]';
     if (btnUsd) btnUsd.className = 'px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition flex items-center gap-1.5 text-[11px]';
+    if (futuresPrefix) futuresPrefix.textContent = 'Rp';
+    if (futuresInput) futuresInput.placeholder = '5.000.000';
   }
 }
 
@@ -1301,6 +1326,9 @@ function applyUnifiedMarketData(dataMap, rate) {
       updateChartCurrentTick(appSymbol, price);
     }
   }
+
+  // Check liquidations for open futures contracts on every price update
+  checkFuturesLiquidations();
 }
 
 // Fetch USD/IDR exchange rate
@@ -1387,6 +1415,84 @@ function executeTrade() {
   if (!currentPrice || currentPrice <= 0) {
     showToast('Harga pasar belum tersedia, tunggu sebentar...', 'error');
     playAudioChime('error');
+    return;
+  }
+
+  // --- FUTURES CONTRACT EXECUTION (LONG / SHORT, MAX 10x) ---
+  if (appState.tradeMode === 'FUTURES') {
+    const marginInput = document.getElementById('input-futures-margin');
+    const inputVal = parseFloat(marginInput?.value || '0');
+
+    if (isNaN(inputVal) || inputVal <= 0) {
+      showToast('Masukkan jumlah margin jaminan yang valid!', 'error');
+      playAudioChime('error');
+      return;
+    }
+
+    const marginIDR = appState.currency === 'USD' ? (inputVal * (usdIdrRate || 15850)) : inputVal;
+    const lev = Math.min(10, Math.max(1, appState.futuresLeverage || 5));
+    const notional = marginIDR * lev;
+    const fee = Math.round(notional * FEE_FUTURES);
+    const totalRequired = Math.round(marginIDR + fee);
+
+    if (totalRequired > appState.cash) {
+      showToast('Saldo kas tidak mencukupi untuk margin dan biaya kontrak!', 'error');
+      playAudioChime('error');
+      return;
+    }
+
+    const isLong = appState.futuresSide === 'LONG';
+    const contractQty = notional / currentPrice;
+    const liqPrice = isLong
+      ? Math.max(0, currentPrice * (1 - 0.90 / lev))
+      : currentPrice * (1 + 0.90 / lev);
+
+    // Deduct cash
+    appState.cash -= totalRequired;
+
+    // Create contract
+    const pos = {
+      id: 'fut-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+      symbol: symbol,
+      name: asset.name,
+      category: asset.category,
+      side: appState.futuresSide,
+      leverage: lev,
+      margin: Math.round(marginIDR),
+      notional: Math.round(notional),
+      qty: contractQty,
+      entryPrice: Math.round(currentPrice),
+      liqPrice: Math.round(liqPrice),
+      fee: fee,
+      openedAt: new Date().toISOString()
+    };
+
+    appState.futuresPositions.unshift(pos);
+
+    // Record History
+    appState.history.unshift({
+      id: 'tx-' + Date.now(),
+      timestamp: new Date().toISOString(),
+      type: `FUTURES ${appState.futuresSide}`,
+      symbol: asset.shortSymbol || symbol,
+      name: asset.name,
+      category: 'FUTURES',
+      qtyDisplay: `${appState.futuresSide} ${lev}x (${contractQty.toFixed(4)} ${asset.unit || 'Unit'})`,
+      price: currentPrice,
+      fee: fee,
+      total: totalRequired,
+      realizedPnl: 0
+    });
+
+    saveState();
+    updateUI();
+    playAudioChime('buy');
+    showToast(`Sukses buka posisi ${appState.futuresSide} ${asset.shortSymbol || symbol} ${lev}x!`, 'success');
+    if (marginInput) marginInput.value = '';
+    calculateOrderEstimates();
+
+    // Auto-switch bottom tab to futures positions
+    switchBottomTab('futures');
     return;
   }
 
@@ -1640,8 +1746,114 @@ function executeTrade() {
   }
 }
 
+// Close Futures Position (Manual Market Close)
+function closeFuturesPosition(posId) {
+  const index = appState.futuresPositions.findIndex(p => p.id === posId);
+  if (index === -1) return;
+
+  const pos = appState.futuresPositions[index];
+  const symbol = pos.symbol;
+  const asset = ASSETS_CONFIG[symbol];
+  const currentPrice = marketData[symbol]?.price || asset?.defaultPrice || pos.entryPrice;
+
+  const isLong = pos.side === 'LONG';
+  const priceDiff = isLong ? (currentPrice - pos.entryPrice) : (pos.entryPrice - currentPrice);
+  const rawPnl = pos.margin * (priceDiff / pos.entryPrice) * pos.leverage;
+  const closeFee = Math.round(pos.notional * (currentPrice / pos.entryPrice) * FEE_FUTURES);
+  const netPnl = Math.round(rawPnl - closeFee);
+  const returnToCash = Math.max(0, Math.round(pos.margin + rawPnl - closeFee));
+
+  appState.cash += returnToCash;
+
+  // Record in Trade History
+  appState.history.unshift({
+    id: 'tx-' + Date.now(),
+    timestamp: new Date().toISOString(),
+    type: `CLOSE ${pos.side}`,
+    symbol: asset?.shortSymbol || symbol,
+    name: pos.name,
+    category: 'FUTURES',
+    qtyDisplay: `${pos.side} ${pos.leverage}x (${pos.qty.toFixed(4)} ${asset?.unit || 'Unit'})`,
+    price: currentPrice,
+    fee: closeFee,
+    total: returnToCash,
+    realizedPnl: netPnl
+  });
+
+  // Remove position
+  appState.futuresPositions.splice(index, 1);
+
+  saveState();
+  updateUI();
+
+  if (netPnl >= 0) {
+    playAudioChime('buy');
+    showToast(`Posisi ${pos.side} ${pos.symbol} ditutup! Profit: +${formatIDR(netPnl)} (+${((netPnl / pos.margin) * 100).toFixed(2)}%)`, 'success');
+  } else {
+    playAudioChime('sell');
+    showToast(`Posisi ${pos.side} ${pos.symbol} ditutup. Realized Loss: ${formatIDR(netPnl)} (${((netPnl / pos.margin) * 100).toFixed(2)}%)`, 'info');
+  }
+}
+
+// Liquidation Check Engine
+function checkFuturesLiquidations() {
+  if (!appState.futuresPositions || appState.futuresPositions.length === 0) return;
+
+  const liquidatedPositions = [];
+  const remainingPositions = [];
+
+  for (const pos of appState.futuresPositions) {
+    const symbol = pos.symbol;
+    const asset = ASSETS_CONFIG[symbol];
+    const currentPrice = marketData[symbol]?.price || asset?.defaultPrice || pos.entryPrice;
+    const isLong = pos.side === 'LONG';
+
+    const isLiquidated = isLong ? (currentPrice <= pos.liqPrice) : (currentPrice >= pos.liqPrice);
+
+    if (isLiquidated) {
+      liquidatedPositions.push({ pos, currentPrice });
+    } else {
+      remainingPositions.push(pos);
+    }
+  }
+
+  if (liquidatedPositions.length > 0) {
+    appState.futuresPositions = remainingPositions;
+
+    for (const item of liquidatedPositions) {
+      const { pos, currentPrice } = item;
+      const asset = ASSETS_CONFIG[pos.symbol];
+      const loss = -pos.margin;
+
+      // Record in history as LIQUIDATION
+      appState.history.unshift({
+        id: 'tx-' + Date.now(),
+        timestamp: new Date().toISOString(),
+        type: 'LIQUIDATION',
+        symbol: asset?.shortSymbol || pos.symbol,
+        name: pos.name,
+        category: 'FUTURES',
+        qtyDisplay: `${pos.side} ${pos.leverage}x [FORCED]`,
+        price: currentPrice,
+        fee: 0,
+        total: 0,
+        realizedPnl: loss
+      });
+
+      playAudioChime('error');
+      showToast(`⚠️ LIKUIDASI! Posisi ${pos.side} ${pos.symbol} ${pos.leverage}x terlikuidasi pada ${formatIDR(currentPrice)}! Margin hangus.`, 'error');
+    }
+
+    saveState();
+    updateUI();
+  }
+}
+
 // Quick Sell from Portfolio row
 function quickSellAsset(symbol) {
+  if (appState.tradeMode !== 'SPOT') {
+    setTradeMode('SPOT');
+  }
   selectAsset(symbol);
   setOrderType('SELL');
   const asset = ASSETS_CONFIG[symbol];
@@ -1667,7 +1879,7 @@ function calculateOrderEstimates() {
   const symbol = appState.selectedAsset;
   const asset = ASSETS_CONFIG[symbol];
   const currentPrice = marketData[symbol]?.price || asset?.defaultPrice || 0;
-  const isStock = asset.category === 'STOCK';
+  const isStock = asset?.category === 'STOCK';
   const isBuy = appState.orderType === 'BUY';
 
   // Elements
@@ -1682,6 +1894,47 @@ function calculateOrderEstimates() {
   const submitBtnText = document.getElementById('btn-submit-text');
 
   if (execPriceEl) execPriceEl.textContent = formatIDR(currentPrice);
+
+  // --- FUTURES ORDER ESTIMATES ---
+  if (appState.tradeMode === 'FUTURES') {
+    const marginInput = document.getElementById('input-futures-margin');
+    const inputVal = parseFloat(marginInput?.value || '0');
+    const rawVal = isNaN(inputVal) || inputVal < 0 ? 0 : inputVal;
+    const marginIDR = appState.currency === 'USD' ? (rawVal * (usdIdrRate || 15850)) : rawVal;
+    const lev = Math.min(10, Math.max(1, appState.futuresLeverage || 5));
+    const notional = marginIDR * lev;
+    const fee = Math.round(notional * FEE_FUTURES);
+    const totalRequired = Math.round(marginIDR + fee);
+    const isLong = appState.futuresSide === 'LONG';
+
+    const liqPrice = isLong
+      ? Math.max(0, currentPrice * (1 - 0.90 / lev))
+      : currentPrice * (1 + 0.90 / lev);
+
+    const notionalEl = document.getElementById('order-notional-amount');
+    const liqEl = document.getElementById('order-liq-price');
+
+    if (notionalEl) notionalEl.textContent = formatIDR(notional);
+    if (liqEl) liqEl.textContent = formatIDR(liqPrice);
+
+    if (feeLabelEl) feeLabelEl.textContent = `Fee Kontrak (${(FEE_FUTURES * 100).toFixed(2)}%):`;
+    if (feeAmountEl) feeAmountEl.textContent = formatIDR(fee);
+    if (totalLabelEl) totalLabelEl.textContent = 'Margin + Biaya:';
+    if (totalAmountEl) {
+      totalAmountEl.textContent = formatIDR(totalRequired);
+      totalAmountEl.className = isLong ? 'font-mono-numbers text-sm text-emerald-400 font-bold' : 'font-mono-numbers text-sm text-rose-400 font-bold';
+    }
+
+    if (balanceLabelEl) balanceLabelEl.textContent = 'Kas Tersedia:';
+    if (availBalanceEl) availBalanceEl.textContent = formatIDR(appState.cash);
+    if (remainCashEl) remainCashEl.textContent = formatIDR(Math.max(0, appState.cash - totalRequired));
+
+    if (submitBtnText) {
+      const sideText = isLong ? 'BUKA LONG' : 'BUKA SHORT';
+      submitBtnText.textContent = `${sideText} ${asset?.shortSymbol || asset?.symbol || symbol} (${lev}x)`;
+    }
+    return;
+  }
 
   let gross = 0;
   let fee = 0;
@@ -1818,15 +2071,36 @@ function setCryptoPctPreset(pct) {
   calculateOrderEstimates();
 }
 
+// Preset Buttons for Futures Margin %
+function setFuturesPctPreset(pct) {
+  const marginInput = document.getElementById('input-futures-margin');
+  if (!marginInput) return;
+
+  const lev = Math.min(10, Math.max(1, appState.futuresLeverage || 5));
+  const spendableCash = appState.cash * (pct / 100);
+  const marginIDR = spendableCash / (1 + (lev * FEE_FUTURES));
+
+  if (appState.currency === 'USD') {
+    const rate = (usdIdrRate && usdIdrRate > 0) ? usdIdrRate : 15850;
+    marginInput.value = (marginIDR / rate).toFixed(2);
+  } else {
+    marginInput.value = Math.floor(marginIDR);
+  }
+
+  calculateOrderEstimates();
+}
+
 // ==========================================
 // 8. UI UPDATE & RENDERING ENGINE
 // ==========================================
 function updateUI() {
+  checkFuturesLiquidations();
   updateHeaderStats();
   renderWatchlist();
   renderActiveAssetHeader();
   renderActiveHoldingInfo();
   renderPortfolioTable();
+  renderFuturesTable();
   renderHistoryTable();
   calculateOrderEstimates();
 
@@ -1853,9 +2127,24 @@ function updateHeaderStats() {
     totalCostBasis += holding.totalInvested;
   }
 
-  const netWorth = appState.cash + totalPortfolioValue;
-  const floatingPnl = totalPortfolioValue - totalCostBasis;
-  const floatingPnlPct = totalCostBasis > 0 ? (floatingPnl / totalCostBasis) * 100 : 0;
+  // Calculate Futures Margin and Unrealized Floating PnL
+  let totalFuturesMargin = 0;
+  let totalFuturesFloatingPnl = 0;
+
+  for (const pos of (appState.futuresPositions || [])) {
+    const sym = pos.symbol;
+    const currentPrice = marketData[sym]?.price || ASSETS_CONFIG[sym]?.defaultPrice || pos.entryPrice;
+    const isLong = pos.side === 'LONG';
+    const priceDiff = isLong ? (currentPrice - pos.entryPrice) : (pos.entryPrice - currentPrice);
+    const posPnl = Math.round(pos.margin * (priceDiff / pos.entryPrice) * pos.leverage);
+    totalFuturesMargin += pos.margin;
+    totalFuturesFloatingPnl += posPnl;
+  }
+
+  const netWorth = appState.cash + totalPortfolioValue + totalFuturesMargin + totalFuturesFloatingPnl;
+  const totalInvestedBase = totalCostBasis + totalFuturesMargin;
+  const floatingPnl = (totalPortfolioValue - totalCostBasis) + totalFuturesFloatingPnl;
+  const floatingPnlPct = totalInvestedBase > 0 ? (floatingPnl / totalInvestedBase) * 100 : 0;
 
   // Header Elements
   const netWorthEl = document.getElementById('header-networth');
@@ -1982,18 +2271,26 @@ function renderActiveAssetHeader() {
   if (lowEl) lowEl.textContent = formatIDR(data.low || price * 0.985);
   if (prevEl) prevEl.textContent = formatIDR(data.prevClose || price);
 
-  // Switch Order Form inputs based on asset category
+  // Switch Order Form inputs based on asset category & trade mode
   const isStock = config.category === 'STOCK';
   const stockContainer = document.getElementById('input-container-stock');
   const cryptoContainer = document.getElementById('input-container-crypto');
+  const futuresContainer = document.getElementById('input-container-futures');
 
-  if (stockContainer && cryptoContainer) {
-    if (isStock) {
-      stockContainer.classList.remove('hidden');
-      cryptoContainer.classList.add('hidden');
-    } else {
-      stockContainer.classList.add('hidden');
-      cryptoContainer.classList.remove('hidden');
+  if (appState.tradeMode === 'FUTURES') {
+    stockContainer?.classList.add('hidden');
+    cryptoContainer?.classList.add('hidden');
+    futuresContainer?.classList.remove('hidden');
+  } else {
+    futuresContainer?.classList.add('hidden');
+    if (stockContainer && cryptoContainer) {
+      if (isStock) {
+        stockContainer.classList.remove('hidden');
+        cryptoContainer.classList.add('hidden');
+      } else {
+        stockContainer.classList.add('hidden');
+        cryptoContainer.classList.remove('hidden');
+      }
     }
   }
 }
@@ -2001,9 +2298,47 @@ function renderActiveAssetHeader() {
 function renderActiveHoldingInfo() {
   const sym = appState.selectedAsset;
   const config = ASSETS_CONFIG[sym];
-  const holding = appState.portfolio[sym];
   const qtyEl = document.getElementById('holding-qty-text');
   const pnlEl = document.getElementById('holding-pnl-text');
+
+  if (appState.tradeMode === 'FUTURES') {
+    const activeFut = (appState.futuresPositions || []).filter(p => p.symbol === sym);
+    if (activeFut.length === 0) {
+      if (qtyEl) qtyEl.textContent = '0 Kontrak Aktif';
+      if (pnlEl) {
+        pnlEl.textContent = 'Rp 0 (0.00%)';
+        pnlEl.className = 'font-mono-numbers font-bold text-slate-400';
+      }
+      return;
+    }
+
+    const currentPrice = marketData[sym]?.price || config.defaultPrice;
+    let totalFutMargin = 0;
+    let totalFutPnl = 0;
+    let sides = [];
+
+    for (const f of activeFut) {
+      totalFutMargin += f.margin;
+      const isLong = f.side === 'LONG';
+      const priceDiff = isLong ? (currentPrice - f.entryPrice) : (f.entryPrice - currentPrice);
+      const pnl = Math.round(f.margin * (priceDiff / f.entryPrice) * f.leverage);
+      totalFutPnl += pnl;
+      sides.push(`${f.side} ${f.leverage}x`);
+    }
+
+    const roi = totalFutMargin > 0 ? (totalFutPnl / totalFutMargin) * 100 : 0;
+    const isProfit = totalFutPnl >= 0;
+    const sign = isProfit ? '+' : '';
+
+    if (qtyEl) qtyEl.textContent = `${activeFut.length} Kontrak (${sides.join(', ')})`;
+    if (pnlEl) {
+      pnlEl.textContent = `${sign}${formatIDR(totalFutPnl)} (${sign}${roi.toFixed(2)}%)`;
+      pnlEl.className = `font-mono-numbers font-bold ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`;
+    }
+    return;
+  }
+
+  const holding = appState.portfolio[sym];
 
   if (!holding) {
     if (qtyEl) qtyEl.textContent = '0 (Belum punya)';
@@ -2107,6 +2442,81 @@ function renderPortfolioTable() {
   tbody.innerHTML = html;
 }
 
+function renderFuturesTable() {
+  const tbody = document.getElementById('futures-table-body');
+  const emptyState = document.getElementById('futures-empty-state');
+  const badgeCount = document.getElementById('futures-badge-count');
+  if (!tbody) return;
+
+  const positions = appState.futuresPositions || [];
+  if (badgeCount) badgeCount.textContent = positions.length;
+
+  if (positions.length === 0) {
+    tbody.innerHTML = '';
+    if (emptyState) emptyState.classList.remove('hidden');
+    return;
+  }
+
+  if (emptyState) emptyState.classList.add('hidden');
+
+  let html = '';
+  for (const pos of positions) {
+    const sym = pos.symbol;
+    const config = ASSETS_CONFIG[sym] || {};
+    const currentPrice = marketData[sym]?.price || config.defaultPrice || pos.entryPrice;
+    const isLong = pos.side === 'LONG';
+
+    const priceDiff = isLong ? (currentPrice - pos.entryPrice) : (pos.entryPrice - currentPrice);
+    const pnl = Math.round(pos.margin * (priceDiff / pos.entryPrice) * pos.leverage);
+    const roi = (pnl / pos.margin) * 100;
+    const isProfit = pnl >= 0;
+    const sign = isProfit ? '+' : '';
+
+    html += `
+      <tr class="hover:bg-brand-hover/40 transition">
+        <td class="py-3 font-bold text-white flex items-center gap-2">
+          <span class="w-6 h-6 rounded-lg flex items-center justify-center text-[10px]" style="background-color: ${config.iconColor || '#38bdf8'}22; color: ${config.iconColor || '#38bdf8'}">
+            ${config.shortSymbol || sym.slice(0, 3)}
+          </span>
+          <div class="flex flex-col">
+            <span class="font-bold text-white">${config.shortSymbol || sym}</span>
+            <span class="text-[9px] text-slate-400 font-normal">${config.category === 'STOCK' ? 'IDX Stock' : 'Crypto'}</span>
+          </div>
+        </td>
+        <td class="py-3">
+          <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isLong ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}">
+            ${pos.side} ${pos.leverage}x
+          </span>
+        </td>
+        <td class="py-3 text-right">
+          <div class="font-bold text-white">${formatIDR(pos.notional)}</div>
+          <div class="text-[10px] text-slate-400 font-normal">${pos.qty.toFixed(4)} ${config.unit || ''}</div>
+        </td>
+        <td class="py-3 text-right text-slate-300 font-semibold">${formatIDR(pos.margin)}</td>
+        <td class="py-3 text-right text-slate-300">${formatIDR(pos.entryPrice)}</td>
+        <td class="py-3 text-right font-bold text-white">${formatIDR(currentPrice)}</td>
+        <td class="py-3 text-right font-bold text-amber-400">
+          <div class="inline-flex items-center gap-1 justify-end">
+            <i data-lucide="alert-triangle" class="w-3 h-3 text-amber-400/80"></i>
+            <span>${formatIDR(pos.liqPrice)}</span>
+          </div>
+        </td>
+        <td class="py-3 text-right font-bold ${isProfit ? 'text-emerald-400' : 'text-rose-400'}">
+          ${sign}${formatIDR(pnl)}
+          <span class="text-[10px] font-normal block">(${sign}${roi.toFixed(2)}%)</span>
+        </td>
+        <td class="py-3 text-center">
+          <button onclick="closeFuturesPosition('${pos.id}')" class="px-2.5 py-1 rounded-lg text-[10px] font-bold text-rose-400 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 transition whitespace-nowrap">
+            Tutup Posisi
+          </button>
+        </td>
+      </tr>
+    `;
+  }
+
+  tbody.innerHTML = html;
+}
+
 function renderHistoryTable() {
   const tbody = document.getElementById('history-table-body');
   const emptyState = document.getElementById('history-empty-state');
@@ -2128,6 +2538,33 @@ function renderHistoryTable() {
   // Show last 25 transactions
   for (const item of history.slice(0, 25)) {
     const isBuy = item.type === 'BUY';
+    const isSell = item.type === 'SELL';
+    const isFutures = item.type && item.type.startsWith('FUTURES');
+    const isClose = item.type && item.type.startsWith('CLOSE');
+    const isLiq = item.type === 'LIQUIDATION';
+
+    let badgeClass = 'bg-slate-800 text-slate-400 border border-slate-700';
+    let badgeText = item.type;
+
+    if (isBuy) {
+      badgeClass = 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20';
+      badgeText = 'BELI';
+    } else if (isSell) {
+      badgeClass = 'bg-rose-500/10 text-rose-400 border border-rose-500/20';
+      badgeText = 'JUAL';
+    } else if (isFutures) {
+      badgeClass = item.type.includes('LONG') ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20';
+      badgeText = item.type;
+    } else if (isClose) {
+      badgeClass = 'bg-sky-500/10 text-sky-400 border border-sky-500/20';
+      badgeText = item.type;
+    } else if (isLiq) {
+      badgeClass = 'bg-red-500/20 text-red-400 border border-red-500/40 font-black animate-pulse';
+      badgeText = 'LIKUIDASI';
+    }
+
+    const hasRealizedPnl = (isSell || isClose || isLiq);
+    const sign = (item.realizedPnl || 0) >= 0 ? '+' : '';
     const date = new Date(item.timestamp);
     const dateStr = date.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
     const timeStr = date.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
@@ -2136,8 +2573,8 @@ function renderHistoryTable() {
       <tr class="hover:bg-brand-hover/40 transition">
         <td class="py-2.5 text-slate-400 text-[11px]">${dateStr} ${timeStr}</td>
         <td class="py-2.5">
-          <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isBuy ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}">
-            ${isBuy ? 'BELI' : 'JUAL'}
+          <span class="px-2 py-0.5 rounded text-[10px] font-bold ${badgeClass}">
+            ${badgeText}
           </span>
         </td>
         <td class="py-2.5 font-bold text-white">${item.symbol}</td>
@@ -2146,7 +2583,7 @@ function renderHistoryTable() {
         <td class="py-2.5 text-right text-slate-400">${formatIDR(item.fee)}</td>
         <td class="py-2.5 text-right font-bold text-white">${formatIDR(item.total)}</td>
         <td class="py-2.5 text-right font-bold ${item.realizedPnl > 0 ? 'text-emerald-400' : item.realizedPnl < 0 ? 'text-rose-400' : 'text-slate-400'}">
-          ${item.type === 'SELL' ? (item.realizedPnl >= 0 ? '+' : '') + formatIDR(item.realizedPnl) : '-'}
+          ${hasRealizedPnl ? sign + formatIDR(item.realizedPnl) : '-'}
         </td>
       </tr>
     `;
@@ -2165,7 +2602,156 @@ function selectAsset(symbol) {
   renderChartData(symbol);
 }
 
+function setTradeMode(mode) {
+  appState.tradeMode = (mode === 'FUTURES') ? 'FUTURES' : 'SPOT';
+  saveState();
+  updateTradeModeUI();
+  calculateOrderEstimates();
+}
+
+function updateTradeModeUI() {
+  const btnSpot = document.getElementById('btn-mode-spot');
+  const btnFutures = document.getElementById('btn-mode-futures');
+  const leverageContainer = document.getElementById('container-leverage');
+  const notionalRow = document.getElementById('row-futures-notional');
+  const liqRow = document.getElementById('row-futures-liq');
+  const buyText = document.getElementById('tab-order-buy-text');
+  const sellText = document.getElementById('tab-order-sell-text');
+  const stockContainer = document.getElementById('input-container-stock');
+  const cryptoContainer = document.getElementById('input-container-crypto');
+  const futuresContainer = document.getElementById('input-container-futures');
+
+  const isFutures = appState.tradeMode === 'FUTURES';
+
+  if (isFutures) {
+    if (btnFutures) {
+      btnFutures.className = 'py-1.5 rounded-lg text-sky-400 bg-sky-500/20 border border-sky-500/40 font-bold shadow transition flex items-center justify-center gap-1.5';
+    }
+    if (btnSpot) {
+      btnSpot.className = 'py-1.5 rounded-lg text-slate-400 hover:text-white transition flex items-center justify-center gap-1.5';
+    }
+    leverageContainer?.classList.remove('hidden');
+    notionalRow?.classList.remove('hidden');
+    liqRow?.classList.remove('hidden');
+    futuresContainer?.classList.remove('hidden');
+    stockContainer?.classList.add('hidden');
+    cryptoContainer?.classList.add('hidden');
+
+    if (buyText) buyText.textContent = 'LONG (Naik)';
+    if (sellText) sellText.textContent = 'SHORT (Turun)';
+
+    updateLeverageUI();
+    updateFuturesSideUI();
+  } else {
+    if (btnSpot) {
+      btnSpot.className = 'py-1.5 rounded-lg text-white bg-brand-card shadow transition flex items-center justify-center gap-1.5';
+    }
+    if (btnFutures) {
+      btnFutures.className = 'py-1.5 rounded-lg text-slate-400 hover:text-white transition flex items-center justify-center gap-1.5';
+    }
+    leverageContainer?.classList.add('hidden');
+    notionalRow?.classList.add('hidden');
+    liqRow?.classList.add('hidden');
+    futuresContainer?.classList.add('hidden');
+
+    const config = ASSETS_CONFIG[appState.selectedAsset];
+    if (config?.category === 'STOCK') {
+      stockContainer?.classList.remove('hidden');
+      cryptoContainer?.classList.add('hidden');
+    } else {
+      stockContainer?.classList.add('hidden');
+      cryptoContainer?.classList.remove('hidden');
+    }
+
+    if (buyText) buyText.textContent = 'Beli';
+    if (sellText) sellText.textContent = 'Jual';
+
+    setOrderType(appState.orderType);
+  }
+}
+
+function setFuturesSide(side) {
+  appState.futuresSide = (side === 'SHORT') ? 'SHORT' : 'LONG';
+  saveState();
+  updateFuturesSideUI();
+  calculateOrderEstimates();
+}
+
+function updateFuturesSideUI() {
+  if (appState.tradeMode !== 'FUTURES') return;
+  const buyTab = document.getElementById('tab-order-buy');
+  const sellTab = document.getElementById('tab-order-sell');
+  const submitBtn = document.getElementById('btn-submit-order');
+  const isLong = appState.futuresSide === 'LONG';
+
+  if (isLong) {
+    if (buyTab) buyTab.className = 'py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-white bg-emerald-500 shadow-lg shadow-emerald-500/25 transition flex items-center justify-center gap-1.5';
+    if (sellTab) sellTab.className = 'py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-slate-400 bg-brand-dark hover:text-white transition flex items-center justify-center gap-1.5';
+    if (submitBtn) submitBtn.className = 'w-full py-3.5 rounded-xl font-black text-sm uppercase tracking-wider text-white bg-emerald-500 hover:bg-emerald-400 active:scale-[0.99] shadow-lg shadow-emerald-500/25 transition flex items-center justify-center gap-2';
+  } else {
+    if (sellTab) sellTab.className = 'py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-white bg-rose-500 shadow-lg shadow-rose-500/25 transition flex items-center justify-center gap-1.5';
+    if (buyTab) buyTab.className = 'py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-slate-400 bg-brand-dark hover:text-white transition flex items-center justify-center gap-1.5';
+    if (submitBtn) submitBtn.className = 'w-full py-3.5 rounded-xl font-black text-sm uppercase tracking-wider text-white bg-rose-500 hover:bg-rose-400 active:scale-[0.99] shadow-lg shadow-rose-500/25 transition flex items-center justify-center gap-2';
+  }
+}
+
+function setFuturesLeverage(lev) {
+  const val = Math.min(10, Math.max(1, parseInt(lev, 10) || 1));
+  appState.futuresLeverage = val;
+  saveState();
+  updateLeverageUI();
+  calculateOrderEstimates();
+}
+
+function updateLeverageUI() {
+  const currentLev = appState.futuresLeverage || 5;
+  const label = document.getElementById('label-active-leverage');
+  if (label) label.textContent = `${currentLev}x`;
+
+  document.querySelectorAll('.btn-leverage-opt').forEach(btn => {
+    const lev = parseInt(btn.dataset.lev, 10);
+    if (lev === currentLev) {
+      btn.className = 'btn-leverage-opt py-1.5 rounded-lg text-white bg-sky-500/20 border border-sky-500/40 font-bold shadow transition text-center';
+    } else {
+      btn.className = 'btn-leverage-opt py-1.5 rounded-lg bg-brand-dark hover:bg-brand-hover border border-brand-border text-slate-300 transition text-center';
+    }
+  });
+}
+
+function switchBottomTab(tabName) {
+  const tabPortfolio = document.getElementById('tab-btn-portfolio');
+  const tabFutures = document.getElementById('tab-btn-futures');
+  const tabHistory = document.getElementById('tab-btn-history');
+  const contentPortfolio = document.getElementById('tab-content-portfolio');
+  const contentFutures = document.getElementById('tab-content-futures');
+  const contentHistory = document.getElementById('tab-content-history');
+
+  const activeClass = 'bottom-tab py-3 px-3 text-xs font-bold text-white border-b-2 border-emerald-500 flex items-center gap-2 transition whitespace-nowrap';
+  const inactiveClass = 'bottom-tab py-3 px-3 text-xs font-semibold text-slate-400 hover:text-white border-b-2 border-transparent flex items-center gap-2 transition whitespace-nowrap';
+
+  if (tabPortfolio) tabPortfolio.className = tabName === 'portfolio' ? activeClass : inactiveClass;
+  if (tabFutures) tabFutures.className = tabName === 'futures' ? activeClass : inactiveClass;
+  if (tabHistory) tabHistory.className = tabName === 'history' ? activeClass : inactiveClass;
+
+  if (contentPortfolio) {
+    if (tabName === 'portfolio') contentPortfolio.classList.remove('hidden');
+    else contentPortfolio.classList.add('hidden');
+  }
+  if (contentFutures) {
+    if (tabName === 'futures') contentFutures.classList.remove('hidden');
+    else contentFutures.classList.add('hidden');
+  }
+  if (contentHistory) {
+    if (tabName === 'history') contentHistory.classList.remove('hidden');
+    else contentHistory.classList.add('hidden');
+  }
+}
+
 function setOrderType(type) {
+  if (appState.tradeMode === 'FUTURES') {
+    setFuturesSide(type === 'BUY' ? 'LONG' : 'SHORT');
+    return;
+  }
   appState.orderType = type;
   const buyTab = document.getElementById('tab-order-buy');
   const sellTab = document.getElementById('tab-order-sell');
@@ -2210,6 +2796,27 @@ function updateCryptoInputModeUI() {
 }
 
 function setupEventListeners() {
+  // Trading Mode Switcher (Spot vs Futures)
+  document.getElementById('btn-mode-spot')?.addEventListener('click', () => setTradeMode('SPOT'));
+  document.getElementById('btn-mode-futures')?.addEventListener('click', () => setTradeMode('FUTURES'));
+
+  // Futures Leverage Selector (1x, 2x, 3x, 5x, 10x)
+  document.querySelectorAll('.btn-leverage-opt').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const lev = e.currentTarget.dataset.lev;
+      if (lev) setFuturesLeverage(lev);
+    });
+  });
+
+  // Futures Margin Input & Quick Percentage Buttons
+  document.getElementById('input-futures-margin')?.addEventListener('input', calculateOrderEstimates);
+  document.querySelectorAll('.btn-futures-pct').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const pct = parseFloat(e.currentTarget.dataset.pct);
+      if (!isNaN(pct)) setFuturesPctPreset(pct);
+    });
+  });
+
   // Currency Switcher (IDR vs USD)
   document.getElementById('curr-btn-idr')?.addEventListener('click', () => setCurrency('IDR'));
   document.getElementById('curr-btn-usd')?.addEventListener('click', () => setCurrency('USD'));
@@ -2286,25 +2893,10 @@ function setupEventListeners() {
     });
   });
 
-  // Bottom Tabs (Portfolio vs History)
-  const tabPortfolio = document.getElementById('tab-btn-portfolio');
-  const tabHistory = document.getElementById('tab-btn-history');
-  const contentPortfolio = document.getElementById('tab-content-portfolio');
-  const contentHistory = document.getElementById('tab-content-history');
-
-  tabPortfolio?.addEventListener('click', () => {
-    tabPortfolio.className = 'bottom-tab py-3 px-3 text-xs font-bold text-white border-b-2 border-emerald-500 flex items-center gap-2 transition';
-    tabHistory.className = 'bottom-tab py-3 px-3 text-xs font-semibold text-slate-400 hover:text-white border-b-2 border-transparent flex items-center gap-2 transition';
-    contentPortfolio?.classList.remove('hidden');
-    contentHistory?.classList.add('hidden');
-  });
-
-  tabHistory?.addEventListener('click', () => {
-    tabHistory.className = 'bottom-tab py-3 px-3 text-xs font-bold text-white border-b-2 border-emerald-500 flex items-center gap-2 transition';
-    tabPortfolio.className = 'bottom-tab py-3 px-3 text-xs font-semibold text-slate-400 hover:text-white border-b-2 border-transparent flex items-center gap-2 transition';
-    contentHistory?.classList.remove('hidden');
-    contentPortfolio?.classList.add('hidden');
-  });
+  // Bottom Tabs (Portfolio vs Futures vs History)
+  document.getElementById('tab-btn-portfolio')?.addEventListener('click', () => switchBottomTab('portfolio'));
+  document.getElementById('tab-btn-futures')?.addEventListener('click', () => switchBottomTab('futures'));
+  document.getElementById('tab-btn-history')?.addEventListener('click', () => switchBottomTab('history'));
 
   // Chart Type Switcher (Candlestick vs Line)
   document.getElementById('chart-type-candle')?.addEventListener('click', () => setChartType('candlestick'));
@@ -2435,6 +3027,7 @@ document.addEventListener('DOMContentLoaded', () => {
   updateTimeframeUI();
   updateCurrencySelectorUI();
   updateCryptoInputModeUI();
+  updateTradeModeUI();
   updateUI();
   if (appState.showMacd) {
     toggleMacd(true);
@@ -2444,4 +3037,13 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   startDataLoop();
 });
+
+// Global window exposure for inline onclick attributes
+window.selectAsset = selectAsset;
+window.quickSellAsset = quickSellAsset;
+window.closeFuturesPosition = closeFuturesPosition;
+window.setTradeMode = setTradeMode;
+window.setFuturesLeverage = setFuturesLeverage;
+window.setFuturesPctPreset = setFuturesPctPreset;
+window.switchBottomTab = switchBottomTab;
 
