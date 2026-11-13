@@ -233,13 +233,89 @@
               <span>MACD</span>
             </button>
 
-            <!-- Timeframe Switcher (1 Jam, 4 Jam, 1 Hari, 1 Minggu, 1 Tahun) -->
-            <div class="flex items-center gap-1 bg-brand-dark p-0.5 rounded-xl border border-brand-border text-[11px] font-mono-numbers">
-              <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold transition" data-tf="1h">1 Jam</button>
-              <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="4h">4 Jam</button>
-              <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1d">1 Hari</button>
-              <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1w">1 Minggu</button>
-              <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1y">1 Tahun</button>
+            <!-- Timeframe Switcher (Quick Pills + Categorized Dropdown ala TradingView) -->
+            <div class="relative flex items-center gap-0.5 bg-brand-dark p-0.5 rounded-xl border border-brand-border text-[11px] font-mono-numbers">
+              <!-- Quick Favorite Intervals -->
+              <button class="chart-tf-btn px-2 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1m" title="1 Menit (Scalping Kilat)">1m</button>
+              <button class="chart-tf-btn px-2 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="5m" title="5 Menit (Day Trading)">5m</button>
+              <button class="chart-tf-btn px-2 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="15m" title="15 Menit (Golden Ratio Intraday)">15m</button>
+              <button class="chart-tf-btn px-2 py-1.5 rounded-lg text-white bg-brand-card font-bold transition shadow" data-tf="1h" title="1 Jam (Hourly Trend)">1h</button>
+              <button class="chart-tf-btn px-2 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="4h" title="4 Jam (Swing King)">4h</button>
+              <button class="chart-tf-btn px-2 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1d" title="1 Hari (Daily Core)">1D</button>
+              <button class="chart-tf-btn px-2 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1w" title="1 Minggu (Weekly Macro)">1W</button>
+
+              <!-- Categorized Dropdown Trigger -->
+              <button id="btn-interval-dropdown" type="button" class="flex items-center gap-1 px-2 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/5 font-medium transition text-[11px] border-l border-brand-border/60 ml-0.5" title="Kategori Interval Lengkap TradingView">
+                <span id="active-tf-badge" class="font-bold text-sky-400">1h</span>
+                <i data-lucide="chevron-down" class="w-3 h-3 text-slate-400 transition-transform duration-200" id="interval-dropdown-chevron"></i>
+              </button>
+
+              <!-- TradingView Categorized Popover Menu -->
+              <div id="interval-dropdown-menu" class="hidden absolute right-0 top-full mt-1.5 w-60 rounded-xl bg-[#090d16]/95 border border-brand-border shadow-2xl z-40 py-2 backdrop-blur-md">
+                <!-- Section: MENIT -->
+                <div class="px-3 py-1 text-[10px] uppercase tracking-wider font-bold text-amber-400/90 flex items-center gap-1.5">
+                  <i data-lucide="clock" class="w-3 h-3 text-amber-400"></i>
+                  <span>Menit (Scalping & Intraday)</span>
+                </div>
+                <div class="px-1 py-0.5 space-y-0.5">
+                  <button class="chart-tf-dropdown-item w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/5 transition" data-tf="1m">
+                    <span class="font-bold text-amber-400 w-9 text-left">1m</span>
+                    <span class="text-slate-400 text-[11px]">1 Menit (Scalping Kilat)</span>
+                  </button>
+                  <button class="chart-tf-dropdown-item w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/5 transition" data-tf="5m">
+                    <span class="font-bold text-amber-400 w-9 text-left">5m</span>
+                    <span class="text-slate-400 text-[11px]">5 Menit (Day Trading)</span>
+                  </button>
+                  <button class="chart-tf-dropdown-item w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/5 transition" data-tf="15m">
+                    <span class="font-bold text-amber-400 w-9 text-left">15m</span>
+                    <span class="text-slate-400 text-[11px]">15 Menit (Golden Intraday)</span>
+                  </button>
+                  <button class="chart-tf-dropdown-item w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/5 transition" data-tf="30m">
+                    <span class="font-bold text-amber-400 w-9 text-left">30m</span>
+                    <span class="text-slate-400 text-[11px]">30 Menit (Breakout)</span>
+                  </button>
+                </div>
+
+                <!-- Section: JAM -->
+                <div class="px-3 pt-2 pb-1 border-t border-brand-border/60 text-[10px] uppercase tracking-wider font-bold text-emerald-400/90 flex items-center gap-1.5 mt-1">
+                  <i data-lucide="timer" class="w-3 h-3 text-emerald-400"></i>
+                  <span>Jam (Swing Trading)</span>
+                </div>
+                <div class="px-1 py-0.5 space-y-0.5">
+                  <button class="chart-tf-dropdown-item w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/5 transition" data-tf="1h">
+                    <span class="font-bold text-emerald-400 w-9 text-left">1h</span>
+                    <span class="text-slate-400 text-[11px]">1 Jam (Hourly Trend)</span>
+                  </button>
+                  <button class="chart-tf-dropdown-item w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/5 transition" data-tf="4h">
+                    <span class="font-bold text-emerald-400 w-9 text-left">4h</span>
+                    <span class="text-slate-400 text-[11px]">4 Jam (Swing King)</span>
+                  </button>
+                </div>
+
+                <!-- Section: HARI & MAKRO -->
+                <div class="px-3 pt-2 pb-1 border-t border-brand-border/60 text-[10px] uppercase tracking-wider font-bold text-purple-400/90 flex items-center gap-1.5 mt-1">
+                  <i data-lucide="calendar" class="w-3 h-3 text-purple-400"></i>
+                  <span>Hari & Makro (Investasi)</span>
+                </div>
+                <div class="px-1 py-0.5 space-y-0.5">
+                  <button class="chart-tf-dropdown-item w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/5 transition" data-tf="1d">
+                    <span class="font-bold text-purple-400 w-9 text-left">1D</span>
+                    <span class="text-slate-400 text-[11px]">1 Hari (Daily Core)</span>
+                  </button>
+                  <button class="chart-tf-dropdown-item w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/5 transition" data-tf="1w">
+                    <span class="font-bold text-purple-400 w-9 text-left">1W</span>
+                    <span class="text-slate-400 text-[11px]">1 Minggu (Weekly Macro)</span>
+                  </button>
+                  <button class="chart-tf-dropdown-item w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/5 transition" data-tf="1mo">
+                    <span class="font-bold text-purple-400 w-9 text-left">1M</span>
+                    <span class="text-slate-400 text-[11px]">1 Bulan (Monthly Cycle)</span>
+                  </button>
+                  <button class="chart-tf-dropdown-item w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/5 transition" data-tf="1y">
+                    <span class="font-bold text-purple-400 w-9 text-left">1Y</span>
+                    <span class="text-slate-400 text-[11px]">1 Tahun (Multi-Year)</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

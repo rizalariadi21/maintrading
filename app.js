@@ -132,6 +132,7 @@ function loadState() {
       appState.history = parsed.history || [];
       appState.currency = parsed.currency || 'IDR';
       appState.showMacd = Boolean(parsed.showMacd);
+      appState.currentTimeframe = parsed.currentTimeframe || '1h';
     }
   } catch (err) {
     console.error('Error loading state from localStorage:', err);
@@ -146,7 +147,8 @@ function saveState() {
       portfolio: appState.portfolio,
       history: appState.history,
       currency: appState.currency,
-      showMacd: appState.showMacd
+      showMacd: appState.showMacd,
+      currentTimeframe: appState.currentTimeframe
     }));
   } catch (err) {
     console.error('Error saving state to localStorage:', err);
@@ -381,21 +383,36 @@ async function fetchHistoricalCandles(symbol, tf) {
   let range = '1d';
   let interval = '5m';
 
-  if (tf === '1h') {
+  if (tf === '1m') {
+    range = '1d';
+    interval = '1m';
+  } else if (tf === '5m') {
     range = '1d';
     interval = '5m';
-  } else if (tf === '4h') {
-    range = '1d';
-    interval = '15m';
-  } else if (tf === '1d') {
+  } else if (tf === '15m') {
     range = '5d';
-    interval = '1h';
-  } else if (tf === '1w') {
+    interval = '15m';
+  } else if (tf === '30m') {
     range = '1mo';
-    interval = '1d';
-  } else if (tf === '1y') {
+    interval = '30m';
+  } else if (tf === '1h') {
+    range = '1mo';
+    interval = '1h';
+  } else if (tf === '4h') {
+    range = '3mo';
+    interval = '1h'; // 1h candles aggregated to 4-hour candles below
+  } else if (tf === '1d') {
     range = '1y';
     interval = '1d';
+  } else if (tf === '1w') {
+    range = '2y';
+    interval = '1wk';
+  } else if (tf === '1mo') {
+    range = '5y';
+    interval = '1mo';
+  } else if (tf === '1y') {
+    range = '5y';
+    interval = '1mo';
   }
 
   try {
@@ -404,13 +421,50 @@ async function fetchHistoricalCandles(symbol, tf) {
       const json = await res.json();
       const stockData = json?.data?.[querySymbol];
       if (stockData?.chart && stockData.chart.length > 0) {
-        const candles = stockData.chart
+        let rawCandles = stockData.chart
           .filter(c => c.time && c.open && c.high && c.low && c.close)
           .sort((a, b) => a.time - b.time);
 
-        if (candles.length > 0) {
+        // Aggregate 1h candles to true 4h candles if timeframe is 4h
+        if (tf === '4h' && rawCandles.length > 0) {
+          const aggregated = [];
+          let currentBlock = [];
+          let blockStart = 0;
+
+          for (const c of rawCandles) {
+            const cBlock = Math.floor(c.time / 14400) * 14400;
+            if (blockStart === 0 || cBlock === blockStart) {
+              currentBlock.push(c);
+              blockStart = cBlock;
+            } else {
+              if (currentBlock.length > 0) {
+                aggregated.push({
+                  time: blockStart,
+                  open: currentBlock[0].open,
+                  high: Math.max(...currentBlock.map(x => x.high)),
+                  low: Math.min(...currentBlock.map(x => x.low)),
+                  close: currentBlock[currentBlock.length - 1].close
+                });
+              }
+              currentBlock = [c];
+              blockStart = cBlock;
+            }
+          }
+          if (currentBlock.length > 0) {
+            aggregated.push({
+              time: blockStart,
+              open: currentBlock[0].open,
+              high: Math.max(...currentBlock.map(x => x.high)),
+              low: Math.min(...currentBlock.map(x => x.low)),
+              close: currentBlock[currentBlock.length - 1].close
+            });
+          }
+          rawCandles = aggregated;
+        }
+
+        if (rawCandles.length > 0) {
           const uniqueMap = new Map();
-          for (const c of candles) {
+          for (const c of rawCandles) {
             if (isCrypto) {
               const rate = usdIdrRate || 15850;
               uniqueMap.set(c.time, {
@@ -447,21 +501,36 @@ function generateSyntheticCandles(currentPrice, prevClose, tf) {
   let totalCandles = 60;
   let intervalSec = 300; // 5 mins
 
-  if (tf === '1h') {
+  if (tf === '1m') {
     totalCandles = 60;
-    intervalSec = 60; // 1 min
+    intervalSec = 60;
+  } else if (tf === '5m') {
+    totalCandles = 60;
+    intervalSec = 300;
+  } else if (tf === '15m') {
+    totalCandles = 60;
+    intervalSec = 900;
+  } else if (tf === '30m') {
+    totalCandles = 60;
+    intervalSec = 1800;
+  } else if (tf === '1h') {
+    totalCandles = 60;
+    intervalSec = 3600;
   } else if (tf === '4h') {
     totalCandles = 60;
-    intervalSec = 240; // 4 mins
+    intervalSec = 14400;
   } else if (tf === '1d') {
     totalCandles = 60;
-    intervalSec = 1440; // 24 mins
+    intervalSec = 86400;
   } else if (tf === '1w') {
     totalCandles = 70;
-    intervalSec = 8640;
+    intervalSec = 86400 * 7;
+  } else if (tf === '1mo') {
+    totalCandles = 60;
+    intervalSec = 86400 * 30;
   } else if (tf === '1y') {
-    totalCandles = 80;
-    intervalSec = 86400 * 4.5;
+    totalCandles = 60;
+    intervalSec = 86400 * 365;
   }
 
   const changeTotal = currentPrice - prevClose;
@@ -608,14 +677,52 @@ function setChartType(type) {
 
 function setTimeframe(tf) {
   appState.currentTimeframe = tf;
+  saveState();
+  updateTimeframeUI();
+  renderChartData(appState.selectedAsset);
+}
+
+function updateTimeframeUI() {
+  const currentTf = appState.currentTimeframe || '1h';
+
+  // 1. Update quick pills on the chart header bar
   document.querySelectorAll('.chart-tf-btn').forEach(btn => {
-    if (btn.dataset.tf === tf) {
-      btn.className = 'chart-tf-btn px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold transition';
+    if (btn.dataset.tf === currentTf) {
+      btn.className = 'chart-tf-btn px-2 py-1.5 rounded-lg text-white bg-brand-card font-bold transition shadow';
     } else {
-      btn.className = 'chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition';
+      btn.className = 'chart-tf-btn px-2 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition';
     }
   });
-  renderChartData(appState.selectedAsset);
+
+  // 2. Update dropdown menu items
+  document.querySelectorAll('.chart-tf-dropdown-item').forEach(btn => {
+    const isSelected = btn.dataset.tf === currentTf;
+    if (isSelected) {
+      btn.classList.add('bg-brand-card', 'font-bold', 'text-white');
+      btn.classList.remove('text-slate-300');
+    } else {
+      btn.classList.remove('bg-brand-card', 'font-bold', 'text-white');
+      btn.classList.add('text-slate-300');
+    }
+  });
+
+  // 3. Update dropdown badge indicator
+  const badge = document.getElementById('active-tf-badge');
+  if (badge) {
+    const labels = {
+      '1m': '1m',
+      '5m': '5m',
+      '15m': '15m',
+      '30m': '30m',
+      '1h': '1h',
+      '4h': '4h',
+      '1d': '1D',
+      '1w': '1W',
+      '1mo': '1M',
+      '1y': '1Y'
+    };
+    badge.textContent = labels[currentTf] || currentTf;
+  }
 }
 
 // ==========================================
@@ -2203,12 +2310,43 @@ function setupEventListeners() {
   document.getElementById('chart-type-candle')?.addEventListener('click', () => setChartType('candlestick'));
   document.getElementById('chart-type-line')?.addEventListener('click', () => setChartType('line'));
 
-  // Chart Timeframe Buttons (1 Jam, 4 Jam, 1 Hari, 1 Minggu, 1 Tahun)
-  document.querySelectorAll('.chart-tf-btn').forEach(btn => {
+  // Chart Timeframe Buttons (Quick pills & Dropdown items)
+  document.querySelectorAll('.chart-tf-btn, .chart-tf-dropdown-item').forEach(btn => {
     btn.addEventListener('click', (e) => {
       const tf = e.currentTarget.dataset.tf;
-      if (tf) setTimeframe(tf);
+      if (tf) {
+        setTimeframe(tf);
+        const menu = document.getElementById('interval-dropdown-menu');
+        const chevron = document.getElementById('interval-dropdown-chevron');
+        if (menu) menu.classList.add('hidden');
+        if (chevron) chevron.classList.remove('rotate-180');
+      }
     });
+  });
+
+  // Interval Dropdown Menu Toggle
+  const intervalBtn = document.getElementById('btn-interval-dropdown');
+  const intervalMenu = document.getElementById('interval-dropdown-menu');
+  const intervalChevron = document.getElementById('interval-dropdown-chevron');
+
+  intervalBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isHidden = intervalMenu?.classList.toggle('hidden');
+    if (intervalChevron) {
+      if (isHidden) {
+        intervalChevron.classList.remove('rotate-180');
+      } else {
+        intervalChevron.classList.add('rotate-180');
+      }
+    }
+  });
+
+  // Close interval dropdown when clicking anywhere outside
+  document.addEventListener('click', (e) => {
+    if (intervalMenu && !intervalMenu.contains(e.target) && !intervalBtn?.contains(e.target)) {
+      intervalMenu.classList.add('hidden');
+      intervalChevron?.classList.remove('rotate-180');
+    }
   });
 
   // MACD Indicator Toggle Buttons
@@ -2309,11 +2447,15 @@ document.addEventListener('DOMContentLoaded', () => {
   loadState();
   initChart();
   setupEventListeners();
+  updateTimeframeUI();
   updateCurrencySelectorUI();
   updateCryptoInputModeUI();
   updateUI();
   if (appState.showMacd) {
     toggleMacd(true);
+  }
+  if (window.lucide) {
+    lucide.createIcons();
   }
   startDataLoop();
 });
