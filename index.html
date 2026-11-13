@@ -187,16 +187,39 @@
       </div>
 
       <!-- Chart View Area -->
-      <div class="rounded-2xl bg-brand-card border border-brand-border p-4 shadow-xl flex-1 flex flex-col min-h-[360px]">
-        <div class="flex items-center justify-between mb-3">
-          <div class="flex items-center gap-2">
-            <i data-lucide="line-chart" class="w-4 h-4 text-emerald-400"></i>
-            <span class="text-xs font-bold text-white">Grafik Harga Pasar Realtime</span>
+      <div class="rounded-2xl bg-brand-card border border-brand-border p-4 shadow-xl flex-1 flex flex-col min-h-[380px]">
+        
+        <!-- Chart Controls Header (Type & Timeframes) -->
+        <div class="flex flex-wrap items-center justify-between gap-2.5 mb-3 pb-3 border-b border-brand-border/60">
+          
+          <!-- Left: Chart Type Switcher & OHLC hover info -->
+          <div class="flex flex-wrap items-center gap-2.5">
+            <div class="flex items-center bg-brand-dark p-0.5 rounded-xl border border-brand-border text-xs">
+              <button id="chart-type-candle" class="px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold flex items-center gap-1.5 transition text-[11px] shadow" title="Grafik Candlestick (Lilin)">
+                <i data-lucide="candlestick-chart" class="w-3.5 h-3.5 text-emerald-400"></i>
+                <span>Candlestick</span>
+              </button>
+              <button id="chart-type-line" class="px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium flex items-center gap-1.5 transition text-[11px]" title="Grafik Garis Area">
+                <i data-lucide="line-chart" class="w-3.5 h-3.5"></i>
+                <span>Area Line</span>
+              </button>
+            </div>
+
+            <!-- OHLC Live Tooltip Hover Info -->
+            <div id="chart-ohlc-display" class="hidden sm:flex items-center gap-2 text-[10px] font-mono-numbers text-slate-400 bg-brand-dark/70 px-2.5 py-1 rounded-lg border border-brand-border/60">
+              <span>O: <strong id="ohlc-o" class="text-white font-semibold">-</strong></span>
+              <span>H: <strong id="ohlc-h" class="text-emerald-400 font-semibold">-</strong></span>
+              <span>L: <strong id="ohlc-l" class="text-rose-400 font-semibold">-</strong></span>
+              <span>C: <strong id="ohlc-c" class="text-white font-semibold">-</strong></span>
+            </div>
           </div>
-          <div class="flex items-center gap-1 bg-brand-dark p-1 rounded-xl border border-brand-border text-[11px]">
-            <button class="chart-tf-btn px-2.5 py-1 rounded-lg text-white bg-brand-card font-medium transition" data-tf="1d">1D</button>
-            <button class="chart-tf-btn px-2.5 py-1 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="5d">5D</button>
-            <button class="chart-tf-btn px-2.5 py-1 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1m">1M</button>
+
+          <!-- Right: Timeframe Switcher (1 Jam, 4 Jam, 1 Hari, 1 Minggu) -->
+          <div class="flex items-center gap-1 bg-brand-dark p-0.5 rounded-xl border border-brand-border text-[11px] font-mono-numbers">
+            <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold transition" data-tf="1h">1 Jam</button>
+            <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="4h">4 Jam</button>
+            <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1d">1 Hari</button>
+            <button class="chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1w">1 Minggu</button>
           </div>
         </div>
 
@@ -448,3 +471,4 @@
   <script src="app.js"></script>
 </body>
 </html>
+

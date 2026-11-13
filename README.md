@@ -50,3 +50,4 @@ npx vercel --prod
 ```
 
 Ikuti konfirmasi di terminal, dan aplikasi akan langsung online dengan domain publik `.vercel.app` gratis!
+

@@ -112,7 +112,8 @@ let appState = {
   orderType: 'BUY', // 'BUY' or 'SELL'
   cryptoInputMode: 'IDR', // 'IDR' or 'COIN'
   currentFilter: 'all',
-  currentTf: '1d'
+  chartType: 'candlestick', // 'candlestick' or 'line'
+  currentTimeframe: '1h'    // '1h', '4h', '1d', '1w'
 };
 
 // Market data cache: symbol -> { price, change24h, change24hPct, high, low, prevClose, lastUpdated }
@@ -219,10 +220,11 @@ function playAudioChime(type = 'buy') {
 }
 
 // ==========================================
-// 4. CHART ENGINE (LIGHTWEIGHT CHARTS)
+// 4. CHART ENGINE (LIGHTWEIGHT CHARTS - OHLC CANDLESTICKS & LINE)
 // ==========================================
 let chartInstance = null;
-let chartSeries = null;
+let activeSeries = null;
+let currentChartData = []; // [{ time, open, high, low, close }]
 
 function initChart() {
   const container = document.getElementById('tv-chart-container');
@@ -238,8 +240,8 @@ function initChart() {
       fontFamily: "'JetBrains Mono', monospace"
     },
     grid: {
-      vertLines: { color: 'rgba(32, 43, 61, 0.4)' },
-      horzLines: { color: 'rgba(32, 43, 61, 0.4)' }
+      vertLines: { color: 'rgba(32, 43, 61, 0.35)' },
+      horzLines: { color: 'rgba(32, 43, 61, 0.35)' }
     },
     crosshair: {
       mode: LightweightCharts.CrosshairMode.Normal,
@@ -248,7 +250,7 @@ function initChart() {
     },
     rightPriceScale: {
       borderColor: '#202b3d',
-      scaleMargins: { top: 0.15, bottom: 0.15 }
+      scaleMargins: { top: 0.12, bottom: 0.12 }
     },
     timeScale: {
       borderColor: '#202b3d',
@@ -257,12 +259,18 @@ function initChart() {
     }
   });
 
-  // Area series with nice gradient
-  chartSeries = chartInstance.addAreaSeries({
-    topColor: 'rgba(0, 192, 118, 0.4)',
-    bottomColor: 'rgba(0, 192, 118, 0.01)',
-    lineColor: '#00c076',
-    lineWidth: 2
+  // Crosshair move listener to update OHLC live preview header
+  chartInstance.subscribeCrosshairMove((param) => {
+    if (!param || !param.time || !param.seriesData) {
+      if (currentChartData.length > 0) {
+        updateOhlcDisplay(currentChartData[currentChartData.length - 1]);
+      }
+      return;
+    }
+    const data = param.seriesData.get(activeSeries);
+    if (data) {
+      updateOhlcDisplay(data);
+    }
   });
 
   // Responsive resize
@@ -274,61 +282,279 @@ function initChart() {
       });
     }
   });
+
+  createSeriesInstance();
 }
 
-function renderChartData(symbol) {
-  if (!chartSeries) return;
+function createSeriesInstance() {
+  if (activeSeries && chartInstance) {
+    try {
+      chartInstance.removeSeries(activeSeries);
+    } catch (e) {}
+  }
+
+  if (appState.chartType === 'candlestick') {
+    activeSeries = chartInstance.addCandlestickSeries({
+      upColor: '#00c076',
+      downColor: '#ff3b69',
+      borderVisible: false,
+      wickUpColor: '#00c076',
+      wickDownColor: '#ff3b69'
+    });
+  } else {
+    activeSeries = chartInstance.addAreaSeries({
+      topColor: 'rgba(0, 192, 118, 0.4)',
+      bottomColor: 'rgba(0, 192, 118, 0.01)',
+      lineColor: '#00c076',
+      lineWidth: 2
+    });
+  }
+}
+
+function updateOhlcDisplay(candle) {
+  const oEl = document.getElementById('ohlc-o');
+  const hEl = document.getElementById('ohlc-h');
+  const lEl = document.getElementById('ohlc-l');
+  const cEl = document.getElementById('ohlc-c');
+  if (!candle) return;
+
+  const open = candle.open ?? candle.value ?? 0;
+  const high = candle.high ?? candle.value ?? 0;
+  const low = candle.low ?? candle.value ?? 0;
+  const close = candle.close ?? candle.value ?? 0;
+
+  if (oEl) oEl.textContent = formatIDR(open);
+  if (hEl) hEl.textContent = formatIDR(high);
+  if (lEl) lEl.textContent = formatIDR(low);
+  if (cEl) cEl.textContent = formatIDR(close);
+}
+
+// Fetch historical candles based on symbol & timeframe
+async function fetchHistoricalCandles(symbol, tf) {
+  const asset = ASSETS_CONFIG[symbol];
+  const currentPrice = marketData[symbol]?.price || asset?.defaultPrice || 1000;
+  const prevClose = marketData[symbol]?.prevClose || currentPrice * 0.98;
+
+  // 1. If Saham (IDX)
+  if (asset.category === 'STOCK') {
+    let range = '1d';
+    let interval = '5m';
+
+    if (tf === '1h') {
+      range = '1d';
+      interval = '5m';
+    } else if (tf === '4h') {
+      range = '1d';
+      interval = '15m';
+    } else if (tf === '1d') {
+      range = '5d';
+      interval = '30m';
+    } else if (tf === '1w') {
+      range = '1mo';
+      interval = '1d';
+    }
+
+    try {
+      const res = await fetch(`/api/stock?symbol=${encodeURIComponent(symbol)}&range=${range}&interval=${interval}`);
+      if (res.ok) {
+        const json = await res.json();
+        const stockData = json?.data?.[symbol];
+        if (stockData?.chart && stockData.chart.length > 0) {
+          const candles = stockData.chart
+            .filter(c => c.time && c.open && c.high && c.low && c.close)
+            .sort((a, b) => a.time - b.time);
+
+          if (candles.length > 0) {
+            const uniqueMap = new Map();
+            for (const c of candles) {
+              uniqueMap.set(c.time, c);
+            }
+            return Array.from(uniqueMap.values());
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Stock candle fetch error, using synthetic fallback:', e.message);
+    }
+  }
+
+  // 2. If Crypto
+  if (asset.category === 'CRYPTO') {
+    const cgId = asset.coingeckoId;
+    let days = 1;
+    if (tf === '1w') days = 7;
+    else if (tf === '1d') days = 1;
+    else days = 1;
+
+    try {
+      const res = await fetch(`https://api.coingecko.com/api/v3/coins/${cgId}/ohlc?vs_currency=idr&days=${days}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          const uniqueMap = new Map();
+          for (const item of data) {
+            const timeSec = Math.floor(item[0] / 1000);
+            uniqueMap.set(timeSec, {
+              time: timeSec,
+              open: Math.round(item[1]),
+              high: Math.round(item[2]),
+              low: Math.round(item[3]),
+              close: Math.round(item[4])
+            });
+          }
+          let candles = Array.from(uniqueMap.values()).sort((a, b) => a.time - b.time);
+
+          if (tf === '1h' && candles.length > 20) {
+            candles = candles.slice(-20);
+          } else if (tf === '4h' && candles.length > 35) {
+            candles = candles.slice(-35);
+          }
+          return candles;
+        }
+      }
+    } catch (e) {
+      console.warn('Crypto candle fetch error, using synthetic fallback:', e.message);
+    }
+  }
+
+  // 3. Fallback: Generate high quality synthetic candles matching actual price and trend
+  return generateSyntheticCandles(currentPrice, prevClose, tf);
+}
+
+function generateSyntheticCandles(currentPrice, prevClose, tf) {
+  const points = [];
+  const now = Math.floor(Date.now() / 1000);
+  let totalCandles = 30;
+  let intervalSec = 300; // 5 mins
+
+  if (tf === '1h') {
+    totalCandles = 24;
+    intervalSec = 150; // 2.5 mins
+  } else if (tf === '4h') {
+    totalCandles = 32;
+    intervalSec = 450; // 7.5 mins
+  } else if (tf === '1d') {
+    totalCandles = 36;
+    intervalSec = 1800; // 30 mins
+  } else if (tf === '1w') {
+    totalCandles = 42;
+    intervalSec = 14400; // 4 hours
+  }
+
+  const changeTotal = currentPrice - prevClose;
+  let prevVal = prevClose;
+
+  for (let i = totalCandles; i >= 0; i--) {
+    const t = now - (i * intervalSec);
+    const progress = (totalCandles - i) / totalCandles;
+    const base = prevClose + (changeTotal * progress);
+    const noise = Math.sin(i * 0.5) * (currentPrice * 0.007) + Math.cos(i * 1.1) * (currentPrice * 0.004);
+    const targetClose = i === 0 ? currentPrice : Math.max(base + noise, currentPrice * 0.4);
+
+    const open = Math.round(prevVal);
+    const close = Math.round(targetClose);
+    const high = Math.round(Math.max(open, close) + Math.abs(Math.sin(i * 1.5)) * (currentPrice * 0.004));
+    const low = Math.round(Math.min(open, close) - Math.abs(Math.cos(i * 1.5)) * (currentPrice * 0.004));
+
+    points.push({ time: t, open, high, low, close });
+    prevVal = close;
+  }
+
+  return points;
+}
+
+async function renderChartData(symbol) {
+  if (!chartInstance) return;
   const loading = document.getElementById('chart-loading-indicator');
   if (loading) loading.classList.remove('hidden');
 
-  const asset = ASSETS_CONFIG[symbol];
-  const currentPrice = marketData[symbol]?.price || asset?.defaultPrice || 1000;
-  const isUp = (marketData[symbol]?.change24hPct || 0) >= 0;
+  const tf = appState.currentTimeframe || '1h';
+  const candles = await fetchHistoricalCandles(symbol, tf);
+  currentChartData = candles;
 
-  // Tune chart color based on trend
-  chartSeries.applyOptions({
-    topColor: isUp ? 'rgba(0, 192, 118, 0.35)' : 'rgba(255, 59, 105, 0.35)',
-    bottomColor: isUp ? 'rgba(0, 192, 118, 0.01)' : 'rgba(255, 59, 105, 0.01)',
-    lineColor: isUp ? '#00c076' : '#ff3b69'
-  });
+  createSeriesInstance();
 
-  // Generate smooth historical curve anchored to actual market price & previous close
-  const points = [];
-  const now = Math.floor(Date.now() / 1000);
-  const totalPoints = 60;
-  const intervalSec = 15 * 60; // 15 mins each
-  const prevClose = marketData[symbol]?.prevClose || currentPrice * 0.98;
-  const changeTotal = currentPrice - prevClose;
-
-  for (let i = totalPoints; i >= 0; i--) {
-    const t = now - (i * intervalSec);
-    const progress = (totalPoints - i) / totalPoints;
-    // Base curve from prevClose to currentPrice + sine wave noise
-    const base = prevClose + (changeTotal * progress);
-    const noise = Math.sin(i * 0.4) * (currentPrice * 0.008) + Math.cos(i * 0.9) * (currentPrice * 0.004);
-    const val = i === 0 ? currentPrice : Math.max(base + noise, currentPrice * 0.5);
-    points.push({ time: t, value: Math.round(val) });
+  if (appState.chartType === 'candlestick') {
+    activeSeries.setData(currentChartData);
+  } else {
+    const isUp = (marketData[symbol]?.change24hPct || 0) >= 0;
+    activeSeries.applyOptions({
+      topColor: isUp ? 'rgba(0, 192, 118, 0.35)' : 'rgba(255, 59, 105, 0.35)',
+      bottomColor: isUp ? 'rgba(0, 192, 118, 0.01)' : 'rgba(255, 59, 105, 0.01)',
+      lineColor: isUp ? '#00c076' : '#ff3b69'
+    });
+    activeSeries.setData(currentChartData.map(c => ({ time: c.time, value: c.close })));
   }
 
-  chartSeries.setData(points);
   chartInstance.timeScale().fitContent();
+
+  if (currentChartData.length > 0) {
+    updateOhlcDisplay(currentChartData[currentChartData.length - 1]);
+  }
 
   setTimeout(() => {
     if (loading) loading.classList.add('hidden');
-  }, 250);
+  }, 200);
 }
 
 function updateChartCurrentTick(symbol, newPrice) {
-  if (!chartSeries || appState.selectedAsset !== symbol) return;
-  const now = Math.floor(Date.now() / 1000);
-  try {
-    chartSeries.update({
-      time: now,
-      value: newPrice
-    });
-  } catch (e) {
-    // Silently ignore timestamp sequencing if duplicate
+  if (!activeSeries || appState.selectedAsset !== symbol || currentChartData.length === 0) return;
+  const lastIndex = currentChartData.length - 1;
+  const lastCandle = currentChartData[lastIndex];
+
+  lastCandle.close = Math.round(newPrice);
+  lastCandle.high = Math.max(lastCandle.high, lastCandle.close);
+  lastCandle.low = Math.min(lastCandle.low, lastCandle.close);
+
+  if (appState.chartType === 'candlestick') {
+    try {
+      activeSeries.update(lastCandle);
+    } catch (e) {}
+  } else {
+    try {
+      activeSeries.update({ time: lastCandle.time, value: lastCandle.close });
+    } catch (e) {}
   }
+
+  updateOhlcDisplay(lastCandle);
+}
+
+function setChartType(type) {
+  if (appState.chartType === type) return;
+  appState.chartType = type;
+
+  const btnCandle = document.getElementById('chart-type-candle');
+  const btnLine = document.getElementById('chart-type-line');
+
+  if (type === 'candlestick') {
+    if (btnCandle) btnCandle.className = 'px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold flex items-center gap-1.5 transition text-[11px] shadow';
+    if (btnLine) btnLine.className = 'px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium flex items-center gap-1.5 transition text-[11px]';
+  } else {
+    if (btnLine) btnLine.className = 'px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold flex items-center gap-1.5 transition text-[11px] shadow';
+    if (btnCandle) btnCandle.className = 'px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium flex items-center gap-1.5 transition text-[11px]';
+  }
+
+  createSeriesInstance();
+  if (currentChartData.length > 0) {
+    if (type === 'candlestick') {
+      activeSeries.setData(currentChartData);
+    } else {
+      activeSeries.setData(currentChartData.map(c => ({ time: c.time, value: c.close })));
+    }
+    chartInstance.timeScale().fitContent();
+  }
+}
+
+function setTimeframe(tf) {
+  appState.currentTimeframe = tf;
+  document.querySelectorAll('.chart-tf-btn').forEach(btn => {
+    if (btn.dataset.tf === tf) {
+      btn.className = 'chart-tf-btn px-2.5 py-1.5 rounded-lg text-white bg-brand-card font-bold transition';
+    } else {
+      btn.className = 'chart-tf-btn px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-white font-medium transition';
+    }
+  });
+  renderChartData(appState.selectedAsset);
 }
 
 // ==========================================
@@ -1456,14 +1682,15 @@ function setupEventListeners() {
     contentPortfolio?.classList.add('hidden');
   });
 
-  // Chart Timeframe Buttons
+  // Chart Type Switcher (Candlestick vs Line)
+  document.getElementById('chart-type-candle')?.addEventListener('click', () => setChartType('candlestick'));
+  document.getElementById('chart-type-line')?.addEventListener('click', () => setChartType('line'));
+
+  // Chart Timeframe Buttons (1 Jam, 4 Jam, 1 Hari, 1 Minggu)
   document.querySelectorAll('.chart-tf-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
-      document.querySelectorAll('.chart-tf-btn').forEach(b => {
-        b.className = 'chart-tf-btn px-2.5 py-1 rounded-lg text-slate-400 hover:text-white font-medium transition';
-      });
-      e.target.className = 'chart-tf-btn px-2.5 py-1 rounded-lg text-white bg-brand-card font-medium transition';
-      renderChartData(appState.selectedAsset);
+      const tf = e.currentTarget.dataset.tf;
+      if (tf) setTimeframe(tf);
     });
   });
 
@@ -1546,3 +1773,4 @@ document.addEventListener('DOMContentLoaded', () => {
   updateUI();
   startDataLoop();
 });
+

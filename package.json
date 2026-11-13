@@ -4,9 +4,11 @@
   "description": "Real-time Indonesian Stocks & Crypto Trading Simulator",
   "type": "module",
   "scripts": {
-    "dev": "npx vercel dev"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "keywords": ["trading", "simulator", "indonesia", "stocks", "crypto", "idx", "ihsg", "bbca"],
   "author": "Rizal",
   "license": "MIT"
 }
+
