@@ -15,7 +15,11 @@ export default async function handler(req, res) {
   }
 
   const { symbol, symbols, range = '1d', interval = '15m' } = req.query;
-  const targetSymbols = symbols ? symbols.split(',') : symbol ? [symbol] : ['BBCA.JK', 'BRIS.JK', 'AMMN.JK', '^JKSE'];
+  const targetSymbols = symbols
+    ? symbols.split(',')
+    : symbol
+    ? [symbol]
+    : ['BBCA.JK', 'BRIS.JK', 'AMMN.JK', '^JKSE', 'BTC-USD', 'ETH-USD', 'SOL-USD', 'PAXG-USD'];
 
   try {
     const results = {};

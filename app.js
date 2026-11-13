@@ -7,49 +7,49 @@
 // 1. CONFIGURATION & ASSET DEFINITIONS
 // ==========================================
 const ASSETS_CONFIG = {
-  // Crypto Assets
+  // Crypto Assets (Institutional Feed matching TradingView 1:1)
   BTC: {
     symbol: 'BTC',
     name: 'Bitcoin',
     category: 'CRYPTO',
-    coingeckoId: 'bitcoin',
+    yahooSymbol: 'BTC-USD',
     desc: 'Mata uang kripto terbesar dan pelopor terdesentralisasi',
     iconColor: '#f7931a',
     unit: 'BTC',
-    defaultPrice: 1260000000,
+    defaultPrice: 68900 * 15850,
     minQty: 0.0001
   },
   ETH: {
     symbol: 'ETH',
     name: 'Ethereum',
     category: 'CRYPTO',
-    coingeckoId: 'ethereum',
+    yahooSymbol: 'ETH-USD',
     desc: 'Platform smart contract dan ekosistem Web3 terbesar',
     iconColor: '#627eea',
     unit: 'ETH',
-    defaultPrice: 35800000,
+    defaultPrice: 1950 * 15850,
     minQty: 0.001
   },
   SOL: {
     symbol: 'SOL',
     name: 'Solana',
     category: 'CRYPTO',
-    coingeckoId: 'solana',
+    yahooSymbol: 'SOL-USD',
     desc: 'Blockchain berkecepatan tinggi dengan biaya transaksi super murah',
     iconColor: '#14f195',
     unit: 'SOL',
-    defaultPrice: 1480000,
+    defaultPrice: 81 * 15850,
     minQty: 0.01
   },
   PAXG: {
     symbol: 'PAXG',
     name: 'PAX Gold (Emas)',
     category: 'CRYPTO',
-    coingeckoId: 'pax-gold',
+    yahooSymbol: 'PAXG-USD',
     desc: 'Aset kripto beragun emas fisik murni (1 PAXG = 1 troy oz emas)',
     iconColor: '#d4af37',
     unit: 'PAXG',
-    defaultPrice: 70600000,
+    defaultPrice: 3880 * 15850,
     minQty: 0.001
   },
 
@@ -348,92 +348,68 @@ function updateOhlcDisplay(candle, isAlreadyScaled = false) {
 // Fetch historical candles based on symbol & timeframe
 async function fetchHistoricalCandles(symbol, tf) {
   const asset = ASSETS_CONFIG[symbol];
+  const querySymbol = asset?.yahooSymbol || symbol;
+  const isCrypto = asset.category === 'CRYPTO';
   const currentPrice = marketData[symbol]?.price || asset?.defaultPrice || 1000;
   const prevClose = marketData[symbol]?.prevClose || currentPrice * 0.98;
 
-  // 1. If Saham (IDX)
-  if (asset.category === 'STOCK') {
-    let range = '1d';
-    let interval = '5m';
+  let range = '1d';
+  let interval = '5m';
 
-    if (tf === '1h') {
-      range = '1d';
-      interval = '5m';
-    } else if (tf === '4h') {
-      range = '1d';
-      interval = '15m';
-    } else if (tf === '1d') {
-      range = '5d';
-      interval = '30m';
-    } else if (tf === '1w') {
-      range = '1mo';
-      interval = '1d';
-    }
-
-    try {
-      const res = await fetch(`/api/stock?symbol=${encodeURIComponent(symbol)}&range=${range}&interval=${interval}`);
-      if (res.ok) {
-        const json = await res.json();
-        const stockData = json?.data?.[symbol];
-        if (stockData?.chart && stockData.chart.length > 0) {
-          const candles = stockData.chart
-            .filter(c => c.time && c.open && c.high && c.low && c.close)
-            .sort((a, b) => a.time - b.time);
-
-          if (candles.length > 0) {
-            const uniqueMap = new Map();
-            for (const c of candles) {
-              uniqueMap.set(c.time, c);
-            }
-            return Array.from(uniqueMap.values());
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('Stock candle fetch error, using synthetic fallback:', e.message);
-    }
+  if (tf === '1h') {
+    range = '1d';
+    interval = '5m';
+  } else if (tf === '4h') {
+    range = '1d';
+    interval = '15m';
+  } else if (tf === '1d') {
+    range = '5d';
+    interval = '1h';
+  } else if (tf === '1w') {
+    range = '1mo';
+    interval = '1d';
   }
 
-  // 2. If Crypto
-  if (asset.category === 'CRYPTO') {
-    const cgId = asset.coingeckoId;
-    let days = 1;
-    if (tf === '1w') days = 7;
-    else if (tf === '1d') days = 1;
-    else days = 1;
+  try {
+    const res = await fetch(`/api/stock?symbol=${encodeURIComponent(querySymbol)}&range=${range}&interval=${interval}`);
+    if (res.ok) {
+      const json = await res.json();
+      const stockData = json?.data?.[querySymbol];
+      if (stockData?.chart && stockData.chart.length > 0) {
+        const candles = stockData.chart
+          .filter(c => c.time && c.open && c.high && c.low && c.close)
+          .sort((a, b) => a.time - b.time);
 
-    try {
-      const res = await fetch(`https://api.coingecko.com/api/v3/coins/${cgId}/ohlc?vs_currency=idr&days=${days}`);
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
+        if (candles.length > 0) {
           const uniqueMap = new Map();
-          for (const item of data) {
-            const timeSec = Math.floor(item[0] / 1000);
-            uniqueMap.set(timeSec, {
-              time: timeSec,
-              open: Math.round(item[1]),
-              high: Math.round(item[2]),
-              low: Math.round(item[3]),
-              close: Math.round(item[4])
-            });
+          for (const c of candles) {
+            if (isCrypto) {
+              const rate = usdIdrRate || 15850;
+              uniqueMap.set(c.time, {
+                time: c.time,
+                open: Math.round(c.open * rate),
+                high: Math.round(c.high * rate),
+                low: Math.round(c.low * rate),
+                close: Math.round(c.close * rate)
+              });
+            } else {
+              uniqueMap.set(c.time, {
+                time: c.time,
+                open: Math.round(c.open),
+                high: Math.round(c.high),
+                low: Math.round(c.low),
+                close: Math.round(c.close)
+              });
+            }
           }
-          let candles = Array.from(uniqueMap.values()).sort((a, b) => a.time - b.time);
-
-          if (tf === '1h' && candles.length > 20) {
-            candles = candles.slice(-20);
-          } else if (tf === '4h' && candles.length > 35) {
-            candles = candles.slice(-35);
-          }
-          return candles;
+          return Array.from(uniqueMap.values());
         }
       }
-    } catch (e) {
-      console.warn('Crypto candle fetch error, using synthetic fallback:', e.message);
     }
+  } catch (e) {
+    console.warn('Candle fetch error, using synthetic fallback:', e.message);
   }
 
-  // 3. Fallback: Generate high quality synthetic candles matching actual price and trend
   return generateSyntheticCandles(currentPrice, prevClose, tf);
 }
 
@@ -627,75 +603,51 @@ function updateCurrencySelectorUI() {
 // 5. REALTIME DATA FETCHERS
 // ==========================================
 
-// Fetch Crypto from CoinGecko
-async function fetchCryptoPrices() {
+// ==========================================
+// 5. REALTIME DATA FETCHERS (UNIFIED 1:1 TRADINGVIEW & YAHOO FEED)
+// ==========================================
+
+const ALL_MARKET_SYMBOLS = [
+  'BBCA.JK',
+  'BRIS.JK',
+  'AMMN.JK',
+  IHSG_SYMBOL,
+  'BTC-USD',
+  'ETH-USD',
+  'SOL-USD',
+  'PAXG-USD'
+];
+
+const CRYPTO_PAIR_MAP = {
+  'BTC-USD': 'BTC',
+  'ETH-USD': 'ETH',
+  'SOL-USD': 'SOL',
+  'PAXG-USD': 'PAXG'
+};
+
+async function fetchAllMarketPrices() {
+  const rate = (usdIdrRate && usdIdrRate > 0) ? usdIdrRate : 15850;
+
+  // 1. Try internal /api/stock first
   try {
-    const ids = 'bitcoin,ethereum,solana,pax-gold';
-    const res = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd,idr&include_24hr_change=true`);
-    if (!res.ok) throw new Error(`CoinGecko HTTP ${res.status}`);
-    const data = await res.json();
-
-    const mapping = {
-      BTC: 'bitcoin',
-      ETH: 'ethereum',
-      SOL: 'solana',
-      PAXG: 'pax-gold'
-    };
-
-    for (const [sym, cgId] of Object.entries(mapping)) {
-      const item = data[cgId];
-      if (item && item.idr) {
-        const oldPrice = marketData[sym]?.price;
-        const newPrice = item.idr;
-        const changePct = item.idr_24h_change || 0;
-        const prevClose = newPrice / (1 + (changePct / 100));
-
-        marketData[sym] = {
-          price: newPrice,
-          change24h: newPrice - prevClose,
-          change24hPct: changePct,
-          high: Math.round(newPrice * 1.025),
-          low: Math.round(newPrice * 0.975),
-          prevClose: prevClose,
-          lastUpdated: Date.now()
-        };
-
-        if (oldPrice && oldPrice !== newPrice) {
-          triggerPriceAnimation(sym, newPrice > oldPrice);
-          updateChartCurrentTick(sym, newPrice);
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('Crypto fetch warning:', err.message);
-  }
-}
-
-// Fetch Indonesian Stocks & IHSG
-async function fetchStockPrices() {
-  const stockSymbols = ['BBCA.JK', 'BRIS.JK', 'AMMN.JK', IHSG_SYMBOL];
-
-  // 1. Try Vercel Serverless Function first (`/api/stock`)
-  try {
-    const symParam = encodeURIComponent(stockSymbols.join(','));
+    const symParam = encodeURIComponent(ALL_MARKET_SYMBOLS.join(','));
     const res = await fetch(`/api/stock?symbols=${symParam}`);
     if (res.ok) {
       const json = await res.json();
       if (json.success && json.data) {
-        applyStockData(json.data);
+        applyUnifiedMarketData(json.data, rate);
         return;
       }
     }
   } catch (e) {
-    // Running locally or not deployed on vercel yet
+    // Local / fallback
   }
 
-  // 2. Fallback: Query Yahoo Finance via Public CORS Proxy
-  for (const sym of stockSymbols) {
+  // 2. Fallback: Query Yahoo Finance via CORS proxy
+  for (const sym of ALL_MARKET_SYMBOLS) {
     try {
       const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=1d`;
       const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
-      
       const res = await fetch(proxyUrl);
       if (res.ok) {
         const data = await res.json();
@@ -706,57 +658,60 @@ async function fetchStockPrices() {
           const change = currentPrice - prevClose;
           const changePct = prevClose ? (change / prevClose) * 100 : 0;
 
-          const oldPrice = marketData[sym]?.price;
-          marketData[sym] = {
+          const dataObj = {};
+          dataObj[sym] = {
+            symbol: sym,
             price: currentPrice,
-            change24h: change,
-            change24hPct: changePct,
-            high: meta.regularMarketDayHigh ?? (currentPrice * 1.015),
-            low: meta.regularMarketDayLow ?? (currentPrice * 0.985),
-            prevClose: prevClose,
-            lastUpdated: Date.now()
+            change: change,
+            changePercent: changePct,
+            high: meta.regularMarketDayHigh ?? (currentPrice * 1.01),
+            low: meta.regularMarketDayLow ?? (currentPrice * 0.99),
+            previousClose: prevClose
           };
-
-          if (oldPrice && oldPrice !== currentPrice) {
-            triggerPriceAnimation(sym, currentPrice > oldPrice);
-            updateChartCurrentTick(sym, currentPrice);
-          }
+          applyUnifiedMarketData(dataObj, rate);
         }
       }
     } catch (err) {
-      // If offline or blocked, ensure default fallback exists
-      if (!marketData[sym]) {
-        const def = ASSETS_CONFIG[sym]?.defaultPrice || (sym === IHSG_SYMBOL ? 7300 : 5000);
-        marketData[sym] = {
-          price: def,
-          change24h: 0,
-          change24hPct: 0,
-          high: def,
-          low: def,
-          prevClose: def,
-          lastUpdated: Date.now()
-        };
-      }
+      // Keep existing
     }
   }
 }
 
-function applyStockData(dataMap) {
-  for (const [sym, item] of Object.entries(dataMap)) {
-    const oldPrice = marketData[sym]?.price;
-    marketData[sym] = {
-      price: item.price,
-      change24h: item.change,
+function applyUnifiedMarketData(dataMap, rate) {
+  for (const [rawSym, item] of Object.entries(dataMap)) {
+    const isCrypto = Boolean(CRYPTO_PAIR_MAP[rawSym]);
+    const appSymbol = isCrypto ? CRYPTO_PAIR_MAP[rawSym] : rawSym;
+    const oldPrice = marketData[appSymbol]?.price;
+
+    let price = item.price;
+    let change = item.change;
+    let high = item.high;
+    let low = item.low;
+    let prevClose = item.previousClose;
+
+    if (isCrypto) {
+      // Raw item.price is 1:1 USD from TradingView index
+      price = Math.round(item.price * rate);
+      change = Math.round(item.change * rate);
+      high = Math.round(item.high * rate);
+      low = Math.round(item.low * rate);
+      prevClose = Math.round(item.previousClose * rate);
+    }
+
+    marketData[appSymbol] = {
+      price: price,
+      rawUSD: isCrypto ? item.price : (price / rate),
+      change24h: change,
       change24hPct: item.changePercent,
-      high: item.high,
-      low: item.low,
-      prevClose: item.previousClose,
+      high: high,
+      low: low,
+      prevClose: prevClose,
       lastUpdated: Date.now()
     };
 
-    if (oldPrice && oldPrice !== item.price) {
-      triggerPriceAnimation(sym, item.price > oldPrice);
-      updateChartCurrentTick(sym, item.price);
+    if (oldPrice && oldPrice !== price) {
+      triggerPriceAnimation(appSymbol, price > oldPrice);
+      updateChartCurrentTick(appSymbol, price);
     }
   }
 }
@@ -784,10 +739,7 @@ async function refreshAllMarketData() {
   const icon = document.getElementById('refresh-icon');
   if (icon) icon.classList.add('animate-spin');
 
-  await Promise.all([
-    fetchCryptoPrices(),
-    fetchStockPrices()
-  ]);
+  await fetchAllMarketPrices();
 
   if (icon) icon.classList.remove('animate-spin');
   updateUI();
