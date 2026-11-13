@@ -1,0 +1,12 @@
+{
+  "name": "simutrade-id",
+  "version": "1.0.0",
+  "description": "Real-time Indonesian Stocks & Crypto Trading Simulator",
+  "type": "module",
+  "scripts": {
+    "dev": "npx vercel dev"
+  },
+  "keywords": ["trading", "simulator", "indonesia", "stocks", "crypto", "idx", "ihsg", "bbca"],
+  "author": "Rizal",
+  "license": "MIT"
+}

@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="id" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SimuTrade ID - Simulasi Trading Saham IDX & Kripto Realtime</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              dark: '#0b0e14',
+              card: '#121824',
+              hover: '#192233',
+              border: '#202b3d',
+              green: '#00c076',
+              red: '#ff3b69',
+              blue: '#0284c7'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  
+  <!-- TradingView Lightweight Charts CDN -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+
+  <!-- Custom Stylesheet -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="bg-[#0b0e14] text-slate-200 min-h-screen flex flex-col antialiased select-none">
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none"></div>
+
+  <!-- TOP NAVBAR -->
+  <header class="border-b border-brand-border bg-[#121824]/90 backdrop-blur-md sticky top-0 z-40 px-4 lg:px-6 py-2.5">
+    <div class="max-w-[1700px] mx-auto flex flex-wrap items-center justify-between gap-3">
+      
+      <!-- Brand & Status -->
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-500 to-sky-500 flex items-center justify-center text-white shadow-lg shadow-emerald-500/20 font-extrabold text-lg">
+          ST
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-base font-bold text-white tracking-tight">SimuTrade <span class="text-emerald-400">ID</span></h1>
+            <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span> REALTIME
+            </span>
+          </div>
+          <p class="text-[11px] text-slate-400">IDX Saham & Crypto Simulator</p>
+        </div>
+      </div>
+
+      <!-- Live Indices Marquee (IHSG & USD/IDR) -->
+      <div class="hidden md:flex items-center gap-6 px-4 py-1.5 rounded-xl bg-[#0b0e14]/70 border border-brand-border text-xs">
+        <div class="flex items-center gap-2" id="ihsg-stat-header">
+          <span class="text-slate-400 font-medium">IHSG:</span>
+          <span id="header-ihsg-price" class="font-mono-numbers font-bold text-white">Loading...</span>
+          <span id="header-ihsg-change" class="font-mono-numbers text-[11px] font-semibold">--</span>
+        </div>
+        <div class="w-px h-3.5 bg-brand-border"></div>
+        <div class="flex items-center gap-2">
+          <span class="text-slate-400 font-medium">USD/IDR:</span>
+          <span id="header-usdidr-rate" class="font-mono-numbers font-bold text-white">Rp 15.850</span>
+        </div>
+        <div class="w-px h-3.5 bg-brand-border"></div>
+        <div class="flex items-center gap-1.5 text-slate-400 text-[11px]">
+          <i data-lucide="refresh-cw" class="w-3 h-3 text-slate-400 animate-spin" id="refresh-icon"></i>
+          <span id="countdown-timer">Update 5s</span>
+        </div>
+      </div>
+
+      <!-- Portfolio Summary Badges -->
+      <div class="flex items-center gap-3">
+        <!-- Net Worth Card -->
+        <div class="px-3.5 py-1.5 rounded-xl bg-[#192233] border border-brand-border text-right">
+          <span class="text-[10px] text-slate-400 uppercase tracking-wider block font-medium">Total Nilai Aset</span>
+          <div class="flex items-center justify-end gap-1.5">
+            <span id="header-networth" class="font-mono-numbers font-extrabold text-white text-sm lg:text-base">Rp 100.000.000</span>
+          </div>
+        </div>
+
+        <!-- Cash Balance Card -->
+        <div class="px-3.5 py-1.5 rounded-xl bg-[#192233] border border-brand-border text-right hidden sm:block">
+          <span class="text-[10px] text-slate-400 uppercase tracking-wider block font-medium">Kas Tersedia</span>
+          <span id="header-cash" class="font-mono-numbers font-bold text-emerald-400 text-sm lg:text-base">Rp 100.000.000</span>
+        </div>
+
+        <!-- PnL Badge -->
+        <div class="px-3.5 py-1.5 rounded-xl bg-[#192233] border border-brand-border text-right hidden sm:block">
+          <span class="text-[10px] text-slate-400 uppercase tracking-wider block font-medium">Floating PnL</span>
+          <span id="header-pnl" class="font-mono-numbers font-bold text-slate-300 text-xs lg:text-sm">Rp 0 (0.00%)</span>
+        </div>
+
+        <!-- Reset Button -->
+        <button id="btn-open-reset" title="Reset Modal ke Rp 100 Juta" class="p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 transition-all flex items-center justify-center">
+          <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- MAIN APP CONTAINER -->
+  <main class="flex-1 max-w-[1700px] w-full mx-auto p-3 lg:p-4 grid grid-cols-1 lg:grid-cols-12 gap-3.5">
+
+    <!-- LEFT COLUMN: WATCHLIST (Cols: 3) -->
+    <section class="lg:col-span-3 flex flex-col rounded-2xl bg-brand-card border border-brand-border overflow-hidden shadow-xl">
+      <div class="p-3 border-b border-brand-border flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <i data-lucide="layers" class="w-4 h-4 text-emerald-400"></i>
+          <h2 class="text-sm font-bold text-white">Daftar Pasar</h2>
+        </div>
+        <span class="text-[10px] text-slate-400 px-2 py-0.5 rounded bg-brand-dark border border-brand-border font-medium">7 Ticker</span>
+      </div>
+
+      <!-- Filter Tabs -->
+      <div class="flex border-b border-brand-border p-1 bg-brand-dark/50 gap-1 text-xs">
+        <button class="watchlist-tab flex-1 py-1.5 rounded-lg font-medium text-white bg-brand-card text-center transition" data-filter="all">Semua</button>
+        <button class="watchlist-tab flex-1 py-1.5 rounded-lg font-medium text-slate-400 hover:text-white text-center transition" data-filter="crypto">Kripto</button>
+        <button class="watchlist-tab flex-1 py-1.5 rounded-lg font-medium text-slate-400 hover:text-white text-center transition" data-filter="stock">Saham IDX</button>
+      </div>
+
+      <!-- Watchlist Items -->
+      <div id="watchlist-container" class="flex-1 overflow-y-auto divide-y divide-brand-border/60 max-h-[580px] lg:max-h-none">
+        <!-- Generated by JS -->
+      </div>
+    </section>
+
+    <!-- CENTER COLUMN: CHART & ACTIVE ASSET STATS (Cols: 6) -->
+    <section class="lg:col-span-6 flex flex-col gap-3">
+      
+      <!-- Asset Header Card -->
+      <div class="rounded-2xl bg-brand-card border border-brand-border p-4 shadow-xl">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <div id="active-asset-icon" class="w-11 h-11 rounded-2xl bg-brand-dark border border-brand-border flex items-center justify-center font-bold text-base text-white">
+              BTC
+            </div>
+            <div>
+              <div class="flex items-center gap-2">
+                <h3 id="active-asset-name" class="text-lg font-bold text-white">Bitcoin</h3>
+                <span id="active-asset-symbol" class="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-brand-dark border border-brand-border text-slate-400">BTC</span>
+                <span id="active-asset-badge" class="text-[10px] font-semibold px-2 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20">KRIPTO</span>
+              </div>
+              <p id="active-asset-desc" class="text-xs text-slate-400 mt-0.5">Mata uang kripto terbesar di dunia</p>
+            </div>
+          </div>
+
+          <!-- Price & 24h Change -->
+          <div class="text-right">
+            <div id="active-asset-price" class="font-mono-numbers text-xl lg:text-2xl font-black text-white">
+              Rp --
+            </div>
+            <div id="active-asset-change" class="font-mono-numbers text-xs font-bold text-slate-400 mt-0.5 flex items-center justify-end gap-1">
+              <span>--</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Metric Badges (High, Low, PrevClose) -->
+        <div class="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-brand-border text-xs">
+          <div class="bg-brand-dark/60 p-2 rounded-xl border border-brand-border/50">
+            <span class="text-slate-400 text-[10px] block">Tertinggi 24 Jam</span>
+            <span id="active-stat-high" class="font-mono-numbers font-semibold text-slate-200">--</span>
+          </div>
+          <div class="bg-brand-dark/60 p-2 rounded-xl border border-brand-border/50">
+            <span class="text-slate-400 text-[10px] block">Terendah 24 Jam</span>
+            <span id="active-stat-low" class="font-mono-numbers font-semibold text-slate-200">--</span>
+          </div>
+          <div class="bg-brand-dark/60 p-2 rounded-xl border border-brand-border/50">
+            <span class="text-slate-400 text-[10px] block">Harga Penutupan Kemarin</span>
+            <span id="active-stat-prev" class="font-mono-numbers font-semibold text-slate-200">--</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chart View Area -->
+      <div class="rounded-2xl bg-brand-card border border-brand-border p-4 shadow-xl flex-1 flex flex-col min-h-[360px]">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <i data-lucide="line-chart" class="w-4 h-4 text-emerald-400"></i>
+            <span class="text-xs font-bold text-white">Grafik Harga Pasar Realtime</span>
+          </div>
+          <div class="flex items-center gap-1 bg-brand-dark p-1 rounded-xl border border-brand-border text-[11px]">
+            <button class="chart-tf-btn px-2.5 py-1 rounded-lg text-white bg-brand-card font-medium transition" data-tf="1d">1D</button>
+            <button class="chart-tf-btn px-2.5 py-1 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="5d">5D</button>
+            <button class="chart-tf-btn px-2.5 py-1 rounded-lg text-slate-400 hover:text-white font-medium transition" data-tf="1m">1M</button>
+          </div>
+        </div>
+
+        <!-- Lightweight Charts Wrapper -->
+        <div class="relative w-full flex-1 rounded-xl overflow-hidden bg-[#070a0f] border border-brand-border/80 min-h-[280px]">
+          <div id="chart-loading-indicator" class="absolute inset-0 bg-[#070a0f]/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center gap-2">
+            <i data-lucide="loader-2" class="w-6 h-6 text-emerald-400 animate-spin"></i>
+            <span class="text-xs text-slate-400">Memuat data grafik realtime...</span>
+          </div>
+          <div id="tv-chart-container" class="w-full h-full"></div>
+        </div>
+
+        <!-- Active Position Notice in Current Asset -->
+        <div id="active-holding-card" class="mt-3 p-3 rounded-xl bg-brand-dark/70 border border-brand-border flex items-center justify-between text-xs">
+          <div class="flex items-center gap-2">
+            <i data-lucide="briefcase" class="w-4 h-4 text-sky-400"></i>
+            <span class="text-slate-400">Kepemilikan Kamu di Aset Ini:</span>
+            <span id="holding-qty-text" class="font-mono-numbers font-bold text-white">0</span>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-slate-400">Floating PnL:</span>
+            <span id="holding-pnl-text" class="font-mono-numbers font-bold text-slate-400">Rp 0 (0.00%)</span>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- RIGHT COLUMN: TRADING ORDER TERMINAL (Cols: 3) -->
+    <section class="lg:col-span-3 flex flex-col rounded-2xl bg-brand-card border border-brand-border overflow-hidden shadow-xl">
+      
+      <!-- Order Header -->
+      <div class="p-3 border-b border-brand-border flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <i data-lucide="arrow-left-right" class="w-4 h-4 text-emerald-400"></i>
+          <h2 class="text-sm font-bold text-white">Eksekusi Order</h2>
+        </div>
+        <span class="text-[10px] font-semibold px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Instant Market</span>
+      </div>
+
+      <!-- Buy / Sell Action Switcher -->
+      <div class="p-3 grid grid-cols-2 gap-2 border-b border-brand-border bg-brand-dark/30">
+        <button id="tab-order-buy" class="py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-white bg-emerald-500 shadow-lg shadow-emerald-500/25 transition flex items-center justify-center gap-1.5">
+          <i data-lucide="trending-up" class="w-3.5 h-3.5"></i> Beli
+        </button>
+        <button id="tab-order-sell" class="py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-slate-400 bg-brand-dark hover:text-white transition flex items-center justify-center gap-1.5">
+          <i data-lucide="trending-down" class="w-3.5 h-3.5"></i> Jual
+        </button>
+      </div>
+
+      <!-- Order Form Body -->
+      <div class="p-4 flex-1 flex flex-col justify-between gap-4">
+        
+        <div class="flex flex-col gap-3.5">
+          
+          <!-- Available Balance & Unit Indicator -->
+          <div class="flex items-center justify-between text-xs text-slate-400">
+            <span id="order-balance-label">Kas Tersedia:</span>
+            <span id="order-available-balance" class="font-mono-numbers font-bold text-white">Rp 100.000.000</span>
+          </div>
+
+          <!-- DYNAMIC INPUT FOR SAHAM (LOT SYSTEM) -->
+          <div id="input-container-stock" class="flex flex-col gap-2">
+            <label class="text-xs font-semibold text-slate-300 flex items-center justify-between">
+              <span>Jumlah Lot (1 Lot = 100 lbr)</span>
+              <span id="stock-shares-count" class="text-[11px] text-slate-400 font-normal">0 Lembar</span>
+            </label>
+            
+            <div class="flex items-center rounded-xl bg-brand-dark border border-brand-border overflow-hidden focus-within:border-emerald-500 transition">
+              <button id="btn-lot-minus" type="button" class="px-3.5 py-2.5 bg-[#192233] hover:bg-[#232f42] text-slate-300 transition text-sm font-bold">-</button>
+              <input id="input-stock-lot" type="number" min="1" step="1" placeholder="1" value="1" class="w-full bg-transparent text-center font-mono-numbers font-bold text-white focus:outline-none text-sm py-2" />
+              <button id="btn-lot-plus" type="button" class="px-3.5 py-2.5 bg-[#192233] hover:bg-[#232f42] text-slate-300 transition text-sm font-bold">+</button>
+            </div>
+
+            <!-- Quick Lot Presets -->
+            <div class="grid grid-cols-4 gap-1.5 mt-1 text-[11px] font-mono-numbers">
+              <button class="btn-lot-preset py-1 rounded-lg bg-brand-dark hover:bg-brand-hover border border-brand-border text-slate-300 transition" data-lots="1">1 Lot</button>
+              <button class="btn-lot-preset py-1 rounded-lg bg-brand-dark hover:bg-brand-hover border border-brand-border text-slate-300 transition" data-lots="5">5 Lot</button>
+              <button class="btn-lot-preset py-1 rounded-lg bg-brand-dark hover:bg-brand-hover border border-brand-border text-slate-300 transition" data-lots="10">10 Lot</button>
+              <button id="btn-lot-max" class="py-1 rounded-lg bg-brand-dark hover:bg-brand-hover border border-brand-border text-emerald-400 font-bold transition">Maks</button>
+            </div>
+          </div>
+
+          <!-- DYNAMIC INPUT FOR CRYPTO (NOMINAL IDR OR COIN) -->
+          <div id="input-container-crypto" class="flex flex-col gap-2 hidden">
+            <div class="flex items-center justify-between text-xs">
+              <label class="font-semibold text-slate-300">Nominal Pembelian</label>
+              <div class="flex items-center gap-1 bg-brand-dark p-0.5 rounded-lg border border-brand-border text-[10px]">
+                <button id="crypto-mode-idr" class="px-2 py-0.5 rounded bg-brand-card font-medium text-white transition">IDR (Rp)</button>
+                <button id="crypto-mode-coin" class="px-2 py-0.5 rounded text-slate-400 hover:text-white transition">Koin</button>
+              </div>
+            </div>
+
+            <div class="relative rounded-xl bg-brand-dark border border-brand-border overflow-hidden focus-within:border-emerald-500 transition">
+              <span id="crypto-input-prefix" class="absolute left-3 top-2.5 text-xs font-mono font-bold text-slate-400">Rp</span>
+              <input id="input-crypto-amount" type="number" step="any" placeholder="1.000.000" class="w-full bg-transparent pl-10 pr-3 py-2.5 font-mono-numbers font-bold text-white focus:outline-none text-sm" />
+            </div>
+
+            <!-- Estimated Coin or IDR Output -->
+            <div class="text-[11px] text-slate-400 flex items-center justify-between px-1">
+              <span>Estimasi Dapat:</span>
+              <span id="crypto-estimate-text" class="font-mono-numbers font-bold text-emerald-400">0 BTC</span>
+            </div>
+
+            <!-- Quick Percentage Buttons -->
+            <div class="grid grid-cols-4 gap-1.5 mt-1 text-[11px] font-mono-numbers">
+              <button class="btn-pct-preset py-1 rounded-lg bg-brand-dark hover:bg-brand-hover border border-brand-border text-slate-300 transition" data-pct="25">25%</button>
+              <button class="btn-pct-preset py-1 rounded-lg bg-brand-dark hover:bg-brand-hover border border-brand-border text-slate-300 transition" data-pct="50">50%</button>
+              <button class="btn-pct-preset py-1 rounded-lg bg-brand-dark hover:bg-brand-hover border border-brand-border text-slate-300 transition" data-pct="75">75%</button>
+              <button class="btn-pct-preset py-1 rounded-lg bg-brand-dark hover:bg-brand-hover border border-brand-border text-emerald-400 font-bold transition" data-pct="100">100%</button>
+            </div>
+          </div>
+
+          <!-- Order Cost Breakdown -->
+          <div class="p-3 rounded-xl bg-brand-dark/80 border border-brand-border/70 flex flex-col gap-2 text-xs">
+            <div class="flex items-center justify-between text-slate-400">
+              <span>Harga Eksekusi:</span>
+              <span id="order-exec-price" class="font-mono-numbers font-semibold text-slate-200">Rp --</span>
+            </div>
+            <div class="flex items-center justify-between text-slate-400">
+              <span id="order-fee-label">Biaya Transaksi (Fee 0.15%):</span>
+              <span id="order-fee-amount" class="font-mono-numbers font-semibold text-slate-200">Rp 0</span>
+            </div>
+            <div class="w-full h-px bg-brand-border/70"></div>
+            <div class="flex items-center justify-between font-bold">
+              <span id="order-total-label" class="text-white">Total Bayar:</span>
+              <span id="order-total-amount" class="font-mono-numbers text-sm text-emerald-400">Rp 0</span>
+            </div>
+            <div class="flex items-center justify-between text-[11px] text-slate-400">
+              <span>Sisa Kas Nanti:</span>
+              <span id="order-remaining-cash" class="font-mono-numbers font-medium text-slate-300">Rp 100.000.000</span>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Submit Button -->
+        <button id="btn-submit-order" class="w-full py-3.5 rounded-xl font-black text-sm uppercase tracking-wider text-white bg-emerald-500 hover:bg-emerald-400 active:scale-[0.99] shadow-lg shadow-emerald-500/25 transition flex items-center justify-center gap-2">
+          <i data-lucide="check-circle" class="w-4 h-4"></i>
+          <span id="btn-submit-text">Beli BBCA</span>
+        </button>
+
+      </div>
+    </section>
+
+    <!-- BOTTOM SECTION: PORTFOLIO & ORDER HISTORY (Cols: 12) -->
+    <section class="lg:col-span-12 rounded-2xl bg-brand-card border border-brand-border overflow-hidden shadow-xl flex flex-col mt-1">
+      
+      <!-- Tabs Bar -->
+      <div class="flex items-center justify-between px-4 border-b border-brand-border bg-brand-dark/40">
+        <div class="flex gap-2">
+          <button id="tab-btn-portfolio" class="bottom-tab py-3 px-3 text-xs font-bold text-white border-b-2 border-emerald-500 flex items-center gap-2 transition">
+            <i data-lucide="briefcase" class="w-4 h-4 text-emerald-400"></i>
+            <span>Portofolio Aktif</span>
+            <span id="portfolio-badge-count" class="px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-500/20 text-emerald-400">0</span>
+          </button>
+          <button id="tab-btn-history" class="bottom-tab py-3 px-3 text-xs font-semibold text-slate-400 hover:text-white border-b-2 border-transparent flex items-center gap-2 transition">
+            <i data-lucide="history" class="w-4 h-4 text-slate-400"></i>
+            <span>Riwayat Transaksi</span>
+            <span id="history-badge-count" class="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-400">0</span>
+          </button>
+        </div>
+
+        <div class="text-[11px] text-slate-400 hidden sm:block">
+          Data tersimpan otomatis di <span class="font-mono text-emerald-400">localStorage</span> browser
+        </div>
+      </div>
+
+      <!-- Tab Content 1: Active Portfolio Table -->
+      <div id="tab-content-portfolio" class="p-4 overflow-x-auto min-h-[160px]">
+        <table class="w-full text-left text-xs whitespace-nowrap">
+          <thead>
+            <tr class="text-slate-400 border-b border-brand-border/70 text-[11px] uppercase tracking-wider">
+              <th class="pb-2.5 font-semibold">Aset</th>
+              <th class="pb-2.5 font-semibold">Kategori</th>
+              <th class="pb-2.5 font-semibold text-right">Jumlah Dimiliki</th>
+              <th class="pb-2.5 font-semibold text-right">Harga Rata-Rata</th>
+              <th class="pb-2.5 font-semibold text-right">Harga Terkini</th>
+              <th class="pb-2.5 font-semibold text-right">Nilai Pasar</th>
+              <th class="pb-2.5 font-semibold text-right">Floating PnL</th>
+              <th class="pb-2.5 font-semibold text-center">Aksi Cepat</th>
+            </tr>
+          </thead>
+          <tbody id="portfolio-table-body" class="divide-y divide-brand-border/40 font-mono-numbers">
+            <!-- Dynamically populated or empty state -->
+          </tbody>
+        </table>
+        <div id="portfolio-empty-state" class="py-10 text-center flex flex-col items-center justify-center text-slate-400">
+          <i data-lucide="inbox" class="w-8 h-8 text-slate-500 mb-2"></i>
+          <p class="font-medium text-xs">Belum ada aset di portofolio.</p>
+          <p class="text-[11px] text-slate-500 mt-0.5">Pilih koin atau saham di atas lalu klik BELI untuk mulai berinvestasi.</p>
+        </div>
+      </div>
+
+      <!-- Tab Content 2: History Log Table -->
+      <div id="tab-content-history" class="p-4 overflow-x-auto hidden min-h-[160px]">
+        <table class="w-full text-left text-xs whitespace-nowrap">
+          <thead>
+            <tr class="text-slate-400 border-b border-brand-border/70 text-[11px] uppercase tracking-wider">
+              <th class="pb-2.5 font-semibold">Waktu</th>
+              <th class="pb-2.5 font-semibold">Tipe</th>
+              <th class="pb-2.5 font-semibold">Aset</th>
+              <th class="pb-2.5 font-semibold text-right">Jumlah</th>
+              <th class="pb-2.5 font-semibold text-right">Harga Eksekusi</th>
+              <th class="pb-2.5 font-semibold text-right">Fee</th>
+              <th class="pb-2.5 font-semibold text-right">Total Transaksi</th>
+              <th class="pb-2.5 font-semibold text-right">Realized PnL</th>
+            </tr>
+          </thead>
+          <tbody id="history-table-body" class="divide-y divide-brand-border/40 font-mono-numbers">
+            <!-- Dynamically populated or empty state -->
+          </tbody>
+        </table>
+        <div id="history-empty-state" class="py-10 text-center flex flex-col items-center justify-center text-slate-400">
+          <i data-lucide="clock" class="w-8 h-8 text-slate-500 mb-2"></i>
+          <p class="font-medium text-xs">Belum ada riwayat transaksi.</p>
+          <p class="text-[11px] text-slate-500 mt-0.5">Semua aksi beli dan jual akan otomatis dicatat di sini.</p>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- RESET CONFIRMATION MODAL -->
+  <div id="modal-reset" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+    <div class="bg-brand-card border border-brand-border max-w-md w-full rounded-2xl p-6 shadow-2xl flex flex-col gap-4 animate-scale">
+      <div class="w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-400 border border-rose-500/20 flex items-center justify-center">
+        <i data-lucide="alert-triangle" class="w-6 h-6"></i>
+      </div>
+      <div>
+        <h3 class="text-base font-bold text-white">Reset Modal ke Rp 100 Juta?</h3>
+        <p class="text-xs text-slate-400 mt-1 leading-relaxed">
+          Semua aset yang sedang kamu miliki di portofolio dan seluruh riwayat transaksi akan dihapus secara permanen. Saldo kas kamu akan dikembalikan ke modal awal <strong>Rp 100.000.000</strong>.
+        </p>
+      </div>
+      <div class="flex items-center justify-end gap-2.5 mt-2">
+        <button id="btn-cancel-reset" class="px-4 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-brand-dark border border-brand-border transition">
+          Batal
+        </button>
+        <button id="btn-confirm-reset" class="px-4 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 transition shadow-lg shadow-rose-600/30">
+          Ya, Reset Akun
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- APPLICATION SCRIPT -->
+  <script src="app.js"></script>
+</body>
+</html>

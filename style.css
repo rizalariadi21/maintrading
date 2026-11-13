@@ -1,0 +1,100 @@
+/* Custom Styles for SimuTrade ID */
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg-main: #0b0e14;
+  --bg-card: #121824;
+  --bg-hover: #192233;
+  --border-color: #202b3d;
+  --green: #00c076;
+  --red: #ff3b69;
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: var(--bg-main);
+  color: #e2e8f0;
+}
+
+.font-mono-numbers {
+  font-family: 'JetBrains Mono', monospace;
+  font-feature-settings: 'tnum' on, 'zero' on;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0b0e14;
+}
+::-webkit-scrollbar-thumb {
+  background: #232f42;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #33435c;
+}
+
+/* Animations for Live Price Ticks */
+.flash-up {
+  animation: flashGreen 1.2s ease-out;
+}
+
+.flash-down {
+  animation: flashRed 1.2s ease-out;
+}
+
+@keyframes flashGreen {
+  0% {
+    background-color: rgba(0, 192, 118, 0.35);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@keyframes flashRed {
+  0% {
+    background-color: rgba(255, 59, 105, 0.35);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+/* Shimmer pulse */
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+.pulse-dot {
+  animation: pulseDot 2s infinite ease-in-out;
+}
+
+/* Toast Notification Animation */
+.toast-enter {
+  transform: translateY(-20px);
+  opacity: 0;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.toast-show {
+  transform: translateY(0);
+  opacity: 1;
+}
+
+.toast-leave {
+  transform: translateY(-20px);
+  opacity: 0;
+  transition: all 0.3s ease-in;
+}
+
+/* Chart container styling */
+#tv-chart-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
